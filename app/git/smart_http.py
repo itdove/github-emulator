@@ -296,6 +296,13 @@ async def git_receive_pack(
     except Exception:
         pass  # Don't fail the push if indexing fails
 
+    # Detect and trigger workflow runs
+    try:
+        from app.services.workflow_service import process_push_event
+        await process_push_event(db, repository, user)
+    except Exception:
+        pass  # Don't fail the push if workflow detection fails
+
     return Response(
         content=stdout,
         media_type="application/x-git-receive-pack-result",

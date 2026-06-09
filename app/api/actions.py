@@ -1,7 +1,7 @@
 """Actions endpoints -- workflows, runs, jobs, secrets, variables."""
 
 from fastapi import APIRouter, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from app.api.deps import AuthUser, CurrentUser, DbSession, get_repo_or_404
 from app.config import settings
@@ -129,6 +129,83 @@ async def get_workflow_run(
         "event": r.event, "run_number": r.run_number,
         "url": f"{api}/repos/{owner}/{repo}/actions/runs/{r.id}",
         "created_at": _fmt_dt(r.created_at), "updated_at": _fmt_dt(r.updated_at),
+    }
+
+
+@router.post("/repos/{owner}/{repo}/actions/runs/{run_id}/cancel", status_code=202)
+async def cancel_workflow_run(
+    owner: str, repo: str, run_id: int, db: DbSession, user: AuthUser,
+):
+    """Cancel a workflow run."""
+    repository = await get_repo_or_404(owner, repo, db)
+    from app.services.workflow_service import cancel_workflow_run as do_cancel
+    run = await do_cancel(db, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Not Found")
+    await db.commit()
+    return {}
+
+
+@router.post("/repos/{owner}/{repo}/actions/runs/{run_id}/rerun", status_code=201)
+async def rerun_workflow(
+    owner: str, repo: str, run_id: int, db: DbSession, user: AuthUser,
+):
+    """Re-run a workflow."""
+    repository = await get_repo_or_404(owner, repo, db)
+    result = await db.execute(
+        select(WorkflowRun).where(WorkflowRun.id == run_id, WorkflowRun.repo_id == repository.id)
+    )
+    run = result.scalar_one_or_none()
+    if run is None:
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    count = (await db.execute(
+        select(func.count(WorkflowRun.id)).where(
+            WorkflowRun.workflow_id == run.workflow_id
+        )
+    )).scalar() or 0
+
+    new_run = WorkflowRun(
+        workflow_id=run.workflow_id,
+        repo_id=run.repo_id,
+        head_sha=run.head_sha,
+        head_branch=run.head_branch,
+        event=run.event,
+        status="queued",
+        run_number=count + 1,
+        run_attempt=run.run_attempt + 1,
+        actor_id=user.id,
+        trigger_payload=run.trigger_payload,
+    )
+    db.add(new_run)
+    await db.flush()
+
+    old_jobs = (await db.execute(
+        select(WorkflowJob).where(WorkflowJob.run_id == run_id)
+    )).scalars().all()
+
+    for old_job in old_jobs:
+        new_job = WorkflowJob(
+            run_id=new_run.id,
+            name=old_job.name,
+            workflow_name=old_job.workflow_name,
+            status="queued" if not old_job.needs else "waiting",
+            steps=[
+                {"number": s["number"], "name": s["name"], "status": "queued", "conclusion": None}
+                for s in (old_job.steps or [])
+            ],
+            labels=old_job.labels,
+            run_attempt=new_run.run_attempt,
+            needs=old_job.needs,
+        )
+        db.add(new_job)
+
+    await db.commit()
+    api = f"{BASE}/api/v3"
+    return {
+        "id": new_run.id, "status": new_run.status,
+        "run_number": new_run.run_number, "run_attempt": new_run.run_attempt,
+        "url": f"{api}/repos/{owner}/{repo}/actions/runs/{new_run.id}",
     }
 
 

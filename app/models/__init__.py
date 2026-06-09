@@ -18,7 +18,7 @@ from app.models.commit_status import CommitStatus
 from app.models.check import CheckRun, CheckSuite
 from app.models.event import Event
 from app.models.notification import Notification
-from app.models.actions import Workflow, WorkflowRun, WorkflowJob, Secret, Variable
+from app.models.actions import Runner, RunnerSession, RegistrationToken, Workflow, WorkflowRun, WorkflowJob, Secret, Variable
 from app.models.gist import Gist, GistFile
 from app.models.ssh_key import SSHKey, GPGKey
 from app.models.search_index import FileContent, CommitMetadata
@@ -45,6 +45,7 @@ __all__ = [
     "CheckRun", "CheckSuite",
     "Event",
     "Notification",
+    "Runner", "RunnerSession", "RegistrationToken",
     "Workflow", "WorkflowRun", "WorkflowJob", "Secret", "Variable",
     "Gist", "GistFile",
     "SSHKey", "GPGKey",

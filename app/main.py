@@ -135,6 +135,8 @@ def create_app() -> FastAPI:
     from app.api.reviews import router as reviews_router
     from app.api.oauth import router as oauth_router
     from app.api.actions import router as actions_router
+    from app.api.actions_runners import router as actions_runners_router
+    from app.api.actions_dispatch import router as actions_dispatch_router
     from app.api.markdown import router as markdown_router
     from app.api.emojis import router as emojis_router
     from app.api.gitignore import router as gitignore_router
@@ -153,7 +155,8 @@ def create_app() -> FastAPI:
         collaborators_router, forks_router, reactions_router, events_router,
         search_router, orgs_router, teams_router, notifications_router,
         gists_router, starring_router, reviews_router,
-        actions_router, markdown_router, emojis_router, gitignore_router,
+        actions_router, actions_runners_router, actions_dispatch_router,
+        markdown_router, emojis_router, gitignore_router,
         licenses_router, user_keys_router, deploy_keys_router,
         review_comments_router,
     ]
@@ -208,6 +211,12 @@ def create_app() -> FastAPI:
         get_static_files_app(),
         name="admin-static",
     )
+
+    # -- GHES-internal Actions endpoints (root-level, not under /api/v3/) -----
+    from app.api.actions_pipelines import router as pipelines_router
+    from app.api.actions_distributed_task import router as dt_router
+    app.include_router(pipelines_router)
+    app.include_router(dt_router)
 
     # -- Git Smart HTTP protocol handler --------------------------------------
     from app.git.smart_http import router as git_router

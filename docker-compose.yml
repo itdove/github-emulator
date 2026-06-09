@@ -24,5 +24,19 @@ services:
       - GITHUB_EMULATOR_SSH_PORT=2222
     restart: unless-stopped
 
+  actions-runner:
+    build:
+      context: ./runner
+      dockerfile: Dockerfile
+    environment:
+      - GITHUB_EMULATOR_URL=https://github-emulator
+      - GITHUB_EMULATOR_TOKEN=${GITHUB_EMULATOR_RUNNER_TOKEN:-}
+      - RUNNER_REPO=${RUNNER_REPO:-admin/test-repo}
+      - RUNNER_NAME=docker-runner-1
+      - RUNNER_LABELS=self-hosted,linux
+    depends_on:
+      - github-emulator
+    restart: unless-stopped
+
 volumes:
   github_emulator_data:
