@@ -794,11 +794,13 @@ async def import_form(
 
     result = await db.execute(select(User).order_by(User.login))
     users = list(result.scalars().all())
+    result = await db.execute(select(Organization).order_by(Organization.login))
+    orgs = list(result.scalars().all())
 
     return templates.TemplateResponse(
         request=request,
         name="import_form.html",
-        context=_ctx(request, admin_user=admin_user, users=users),
+        context=_ctx(request, admin_user=admin_user, users=users, orgs=orgs),
     )
 
 
@@ -807,7 +809,7 @@ async def import_handler(
     request: Request,
     source_type: str = Form(...),
     source: str = Form(...),
-    owner_id: int = Form(...),
+    owner_ref: str = Form(...),
     github_token: str = Form(""),
     db: AsyncSession = Depends(get_db),
 ):
@@ -819,56 +821,85 @@ async def import_handler(
     source = source.strip()
     token = github_token.strip() or None
 
+    async def _form_users_and_orgs():
+        r1 = await db.execute(select(User).order_by(User.login))
+        r2 = await db.execute(select(Organization).order_by(Organization.login))
+        return list(r1.scalars().all()), list(r2.scalars().all())
+
     if not source:
-        result = await db.execute(select(User).order_by(User.login))
-        users = list(result.scalars().all())
+        users, orgs = await _form_users_and_orgs()
         return templates.TemplateResponse(
             request=request,
             name="import_form.html",
             context=_ctx(
-                request,
-                admin_user=admin_user,
-                users=users,
-                flash_message="Source is required.",
-                flash_type="error",
+                request, admin_user=admin_user, users=users, orgs=orgs,
+                flash_message="Source is required.", flash_type="error",
             ),
         )
+
+    # Parse owner_ref ("user:123" or "org:456")
+    owner_type = "User"
+    owner_id = None
+    org_login = None
+
+    if ":" in owner_ref:
+        ref_type, ref_id = owner_ref.split(":", 1)
+        if ref_type == "org":
+            result = await db.execute(
+                select(Organization).where(Organization.id == int(ref_id))
+            )
+            org = result.scalar_one_or_none()
+            if not org:
+                users, orgs = await _form_users_and_orgs()
+                return templates.TemplateResponse(
+                    request=request,
+                    name="import_form.html",
+                    context=_ctx(
+                        request, admin_user=admin_user, users=users, orgs=orgs,
+                        flash_message="Invalid organization selected.", flash_type="error",
+                    ),
+                )
+            owner_type = "Organization"
+            org_login = org.login
+            # Use the admin user as owner_id (matches org repo creation pattern)
+            result = await db.execute(select(User).where(User.login == admin_user))
+            admin = result.scalar_one_or_none()
+            if admin:
+                owner_id = admin.id
+            else:
+                owner_id = (await db.execute(select(User.id).limit(1))).scalar()
+        else:
+            owner_id = int(ref_id)
+    else:
+        owner_id = int(owner_ref)
 
     # Validate owner_id
     result = await db.execute(select(User).where(User.id == owner_id))
     owner = result.scalar_one_or_none()
     if not owner:
-        result = await db.execute(select(User).order_by(User.login))
-        users = list(result.scalars().all())
+        users, orgs = await _form_users_and_orgs()
         return templates.TemplateResponse(
             request=request,
             name="import_form.html",
             context=_ctx(
-                request,
-                admin_user=admin_user,
-                users=users,
-                flash_message="Invalid user selected.",
-                flash_type="error",
+                request, admin_user=admin_user, users=users, orgs=orgs,
+                flash_message="Invalid owner selected.", flash_type="error",
             ),
         )
 
     try:
         if source_type == "single":
-            await start_single_import(db, source, owner_id, token)
+            await start_single_import(db, source, owner_id, token, owner_type, org_login)
         else:
-            await start_bulk_import(db, source, owner_id, token, source_type)
+            await start_bulk_import(db, source, owner_id, token, source_type, owner_type, org_login)
     except ValueError as exc:
-        result = await db.execute(select(User).order_by(User.login))
-        users = list(result.scalars().all())
+        users, orgs = await _form_users_and_orgs()
         return templates.TemplateResponse(
             request=request,
             name="import_form.html",
             context=_ctx(
-                request,
-                admin_user=admin_user,
-                users=users,
-                flash_message=str(exc),
-                flash_type="error",
+                request, admin_user=admin_user, users=users, orgs=orgs,
+                flash_message=str(exc), flash_type="error",
             ),
         )
 

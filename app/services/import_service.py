@@ -35,7 +35,10 @@ def parse_github_url(url: str) -> tuple[str, str]:
     return m.group(1), m.group(2)
 
 
-async def start_single_import(db, source_url: str, owner_id: int, github_token: str | None = None) -> ImportJob:
+async def start_single_import(
+    db, source_url: str, owner_id: int, github_token: str | None = None,
+    owner_type: str = "User", org_login: str | None = None,
+) -> ImportJob:
     """Create a single-repo import job and launch it in the background."""
     _, repo_name = parse_github_url(source_url)
 
@@ -50,12 +53,13 @@ async def start_single_import(db, source_url: str, owner_id: int, github_token: 
     await db.commit()
     await db.refresh(job)
 
-    asyncio.create_task(_do_single_import(job.id, source_url.strip(), owner_id, github_token))
+    asyncio.create_task(_do_single_import(job.id, source_url.strip(), owner_id, github_token, owner_type, org_login))
     return job
 
 
 async def start_bulk_import(
-    db, github_name: str, owner_id: int, github_token: str | None = None, source_type: str = "user"
+    db, github_name: str, owner_id: int, github_token: str | None = None,
+    source_type: str = "user", owner_type: str = "User", org_login: str | None = None,
 ) -> ImportJob:
     """Create a bulk import parent job and launch discovery in the background."""
     job = ImportJob(
@@ -68,7 +72,7 @@ async def start_bulk_import(
     await db.commit()
     await db.refresh(job)
 
-    asyncio.create_task(_do_bulk_import(job.id, github_name, owner_id, github_token, source_type))
+    asyncio.create_task(_do_bulk_import(job.id, github_name, owner_id, github_token, source_type, owner_type, org_login))
     return job
 
 
@@ -91,6 +95,8 @@ async def _do_bulk_import(
     owner_id: int,
     github_token: str | None,
     source_type: str,
+    owner_type: str = "User",
+    org_login: str | None = None,
 ) -> None:
     """Discover repos from a GitHub user/org and spawn child import jobs."""
     async with async_session() as db:
@@ -171,7 +177,7 @@ async def _do_bulk_import(
                 await db.refresh(child)
 
                 asyncio.create_task(
-                    _do_single_import(child.id, clone_url, owner_id, github_token)
+                    _do_single_import(child.id, clone_url, owner_id, github_token, owner_type, org_login)
                 )
 
         except Exception as exc:
@@ -191,6 +197,8 @@ async def _do_single_import(
     source_url: str,
     owner_id: int,
     github_token: str | None,
+    owner_type: str = "User",
+    org_login: str | None = None,
 ) -> None:
     """Clone a single GitHub repo and create the local Repository record."""
     async with async_session() as db:
@@ -213,8 +221,11 @@ async def _do_single_import(
             # Extract repo name
             _, repo_name = parse_github_url(source_url)
 
+            # Use org login for namespace when importing into an organization
+            namespace = org_login if owner_type == "Organization" and org_login else owner.login
+
             # Check for duplicate
-            full_name = f"{owner.login}/{repo_name}"
+            full_name = f"{namespace}/{repo_name}"
             existing = await db.execute(
                 select(Repository).where(Repository.full_name == full_name)
             )
@@ -231,7 +242,7 @@ async def _do_single_import(
                 return
 
             # Build disk path
-            disk_path = os.path.join(settings.DATA_DIR, "repos", owner.login, f"{repo_name}.git")
+            disk_path = os.path.join(settings.DATA_DIR, "repos", namespace, f"{repo_name}.git")
             os.makedirs(os.path.dirname(disk_path), exist_ok=True)
 
             # Build clone URL with token if provided
@@ -267,7 +278,7 @@ async def _do_single_import(
             # Create Repository record
             repo = Repository(
                 owner_id=owner.id,
-                owner_type="User",
+                owner_type=owner_type,
                 name=repo_name,
                 full_name=full_name,
                 disk_path=disk_path,

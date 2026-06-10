@@ -23,12 +23,21 @@
             <input type="text" id="source" name="source" class="form-control" placeholder="https://github.com/owner/repo" required>
         </div>
         <div class="form-group">
-            <label for="owner_id">Assign to Local User</label>
-            <select id="owner_id" name="owner_id" class="form-control" required>
-                <option value="">-- Select User --</option>
+            <label for="owner_ref">Assign to Local Owner</label>
+            <select id="owner_ref" name="owner_ref" class="form-control" required>
+                <option value="">-- Select Owner --</option>
+                <optgroup label="Users">
                 {% for user in users %}
-                <option value="{{ user.id }}">{{ user.login }} ({{ user.name or user.login }})</option>
+                <option value="user:{{ user.id }}">{{ user.login }} ({{ user.name or user.login }})</option>
                 {% endfor %}
+                </optgroup>
+                {% if orgs %}
+                <optgroup label="Organizations">
+                {% for org in orgs %}
+                <option value="org:{{ org.id }}">{{ org.login }} ({{ org.name or org.login }})</option>
+                {% endfor %}
+                </optgroup>
+                {% endif %}
             </select>
         </div>
         <div class="form-group">
