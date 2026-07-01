@@ -213,7 +213,10 @@ async def landing(request: Request, db: AsyncSession = Depends(get_db)):
     # Attach owner_login for template use
     repo_list = []
     for repo in repos:
-        repo.owner_login = repo.owner.login if repo.owner else "unknown"
+        if repo.full_name and "/" in repo.full_name:
+            repo.owner_login = repo.full_name.split("/", 1)[0]
+        else:
+            repo.owner_login = repo.owner.login if repo.owner else "unknown"
         repo_list.append(repo)
 
     return templates.TemplateResponse(
@@ -250,7 +253,10 @@ async def search_page(
         )
         repos = list(result.scalars().all())
         for repo in repos:
-            repo.owner_login = repo.owner.login if repo.owner else "unknown"
+            if repo.full_name and "/" in repo.full_name:
+                repo.owner_login = repo.full_name.split("/", 1)[0]
+            else:
+                repo.owner_login = repo.owner.login if repo.owner else "unknown"
 
         result = await db.execute(
             select(User).where(
