@@ -12,15 +12,15 @@ Actions visibility and runner evaluation.
 - `docs/plans/000-overview.md`
 - `docs/plans/actions-visibility-roadmap.md`
 
-## Active Tasks
-
-- `docs/tasks/current/actions-visible-api-and-web-ui.md`
-
 ## Pending Tasks
 
 - `docs/tasks/pending/actions-runner-compose-bootstrap.md`
 - `docs/tasks/pending/actions-job-execution-loop.md`
 - `docs/tasks/pending/actions-hosted-runner-feasibility.md`
+
+## Completed Tasks
+
+- `docs/tasks/done/actions-visible-api-and-web-ui.md`
 
 ## Milestones
 
