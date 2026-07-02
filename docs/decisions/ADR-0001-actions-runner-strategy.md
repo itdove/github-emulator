@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
@@ -22,6 +22,8 @@ self-hosted runners.
 Official GitHub documentation describes GitHub-hosted runners as machines
 provided by GitHub for GitHub Actions workflows. It describes self-hosted
 runners as systems users deploy and manage to execute GitHub Actions jobs.
+GitHub Enterprise Server documentation says GHES users should use self-hosted
+runners and that GitHub-hosted runners are not supported.
 
 The emulator is not GitHub's Actions control plane. It owns its own scheduler,
 database, API, repository storage, identity, runner tokens, and job lifecycle.
@@ -64,8 +66,18 @@ the preferred compatibility target:
   `https://docs.github.com/en/actions/concepts/runners/github-hosted-runners`
 - Self-hosted runners are deployed and managed by the user:
   `https://docs.github.com/en/actions/concepts/runners/self-hosted-runners`
+- GitHub Enterprise Server uses self-hosted runners rather than GitHub-hosted
+  runners:
+  `https://docs.github.com/en/enterprise-server@3.17/actions/how-tos/manage-runners/self-hosted-runners/add-runners`
+- Larger runners are GitHub-hosted runner features for GitHub Team or GitHub
+  Enterprise Cloud:
+  `https://docs.github.com/en/actions/concepts/runners/larger-runners`
+- Actions Runner Controller is a Kubernetes operator for self-hosted runners:
+  `https://docs.github.com/en/actions/concepts/runners/actions-runner-controller`
 - Current repo evidence:
   - `docker-compose.yml` already defines an `actions-runner` service.
+  - `docker-compose.yml` now has an opt-in `actions-real-runner` service
+    profile that builds the upstream `actions/runner` binary.
   - `runner/runner.py` already implements a custom runner loop.
   - `app/api/actions_pipelines.py` and
     `app/api/actions_distributed_task.py` already begin a real-runner
@@ -73,13 +85,13 @@ the preferred compatibility target:
 
 ## Remaining Validation
 
-- Confirm from official GHES Actions documentation whether GitHub-hosted
-  runners are supported for self-managed GHES, and whether that support is
-  relevant to a non-GitHub emulator.
 - Run a spike with the real `actions/runner` binary against the emulator's
   compatibility endpoints.
-- Identify the minimum additional GHES/Azure Pipelines endpoints and payload
-  fields needed by the real runner for registration, job acquisition, timeline
-  updates, log upload, and completion.
-- Decide whether the custom Python runner should execute shell commands or stay
-  a deterministic simulation runner for tests after the real-runner spike.
+- Compare the upstream runner's actual registration and OAuth/token exchange
+  behavior with the emulator's current pool-scoped distributed-task endpoints.
+- Fill any remaining GHES/Azure Pipelines payload fields needed by the real
+  runner beyond the currently tested session, message, timeline, log, and job
+  request flow.
+- Keep the custom Python runner as a deterministic local fallback that can
+  execute simple shell `run:` steps, while avoiding a full Python reimplementation
+  of the upstream runner runtime.

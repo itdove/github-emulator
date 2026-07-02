@@ -92,7 +92,7 @@ Done
   `make actions-ui-smoke`.
 - Verification:
   - `uv run --with pytest --with pytest-asyncio pytest tests/ -v`
-    passed: 230 tests.
+    passed: 234 tests.
   - `bash -n scripts/actions-compose-bootstrap.sh` passed.
   - `python -m py_compile scripts/actions-ui-smoke-playwright.py` passed.
   - Playwright MCP desktop validation against a live local server rendered

@@ -16,11 +16,12 @@ simulation.
 ## Current State
 
 - `docker-compose.yml` defines an `actions-runner` service that builds
-  `runner/Dockerfile`.
+  `runner/Dockerfile` and an opt-in `actions-real-runner` profile that builds
+  the upstream `actions/runner` binary from `runner-real/Dockerfile`.
 - `runner/runner.py` can register with the emulator, heartbeat, poll for jobs,
   report progress, complete jobs, and upload logs.
-- `runner/runner.py` currently simulates step execution; it does not run the
-  workflow `run:` shell commands.
+- `runner/runner.py` executes local shell `run:` steps from the stored job
+  payload and remains the deterministic fallback runner.
 - `app/services/workflow_service.py` detects `.github/workflows/*.yml`, creates
   `Workflow`, `WorkflowRun`, and `WorkflowJob` rows, supports basic trigger
   matching, dependency ordering, and matrix expansion.
@@ -30,7 +31,8 @@ simulation.
   dispatch.
 - `app/api/actions_pipelines.py` and `app/api/actions_distributed_task.py`
   provide partial GHES/Azure Pipelines-style compatibility endpoints for the
-  real `actions/runner` binary.
+  real `actions/runner` binary, including pool-scoped session, message,
+  timeline, log, and job request endpoints.
 - The Web UI has an Actions tab, run list, run detail, job detail, runner list,
   and log view.
 - Dedicated Actions API and Web UI tests exist in `tests/test_actions_api.py`
@@ -39,6 +41,12 @@ simulation.
   `actions-runner` service.
 - `make actions-ui-smoke` runs desktop Playwright validation against a live UI
   when Playwright and a running stack are available.
+- The real `actions/runner` profile exists, but real runner registration,
+  session polling, timeline updates, logs, and completion are not yet verified
+  against the emulator.
+- Protocol-level tests cover the emulator's pool-scoped distributed-task
+  registration/session/message/timeline/log/completion flow without launching
+  the upstream runner binary.
 
 ## Target User Experience
 
@@ -83,10 +91,12 @@ Those pages should show enough state to understand:
    Complete.
 6. Prioritize a real `actions/runner` compatibility spike before expanding the
    Python runner into a larger execution engine.
-   Pending.
+   Real-runner compose artifact exists; pool-scoped protocol tests pass;
+   upstream runner binary verification pending.
 7. Complete hosted-runner feasibility research before spending time trying to
    route emulator jobs to GitHub-owned runners.
-   Proposed runner-strategy ADR complete; real-runner spike still pending.
+   Accepted runner-strategy ADR complete; real-runner protocol spike still
+   pending.
 
 ## Non-Goals For First Visibility Milestone
 
@@ -120,4 +130,9 @@ Those pages should show enough state to understand:
   screenshot of the runners page.
 - Clear result from the hosted-runner feasibility task.
   Complete at ADR level: `docs/decisions/ADR-0001-actions-runner-strategy.md`
-  prefers real `actions/runner` compatibility over GitHub-owned hosted runners.
+  accepts real `actions/runner` compatibility over GitHub-owned hosted runners.
+- Real `actions/runner` spike result.
+  Pending: `runner-real/` and the `actions-real-runner` compose profile exist,
+  and pool-scoped distributed-task protocol tests pass. This environment cannot
+  build/run compose and the upstream runner binary has not yet proven
+  registration or job execution.

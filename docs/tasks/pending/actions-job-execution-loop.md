@@ -7,9 +7,10 @@ real `actions/runner` binary as the preferred compatibility target.
 
 ## Context
 
-The current custom Python runner registers, polls, reports progress, and marks
-steps complete. It does not execute workflow `run:` commands because the server
-only sends minimal step metadata to the runner.
+The current custom Python runner registers, polls, reports progress, executes
+local shell `run:` steps, uploads logs, and marks steps complete. It remains a
+fallback because it does not implement the upstream `actions/runner` runtime or
+protocol.
 
 The desired long-term outcome is maximum compatibility through the real
 `actions/runner` binary. The Python runner should remain available as a
@@ -18,7 +19,7 @@ expand it.
 
 ## Acceptance Criteria
 
-- [ ] Build or document a Docker image/service variant that runs the real
+- [x] Build or document a Docker image/service variant that runs the real
       `actions/runner` binary against the emulator.
 - [ ] Verify real runner registration against the emulator.
 - [ ] Verify real runner session/message polling against the emulator.
@@ -26,10 +27,10 @@ expand it.
       simple shell step.
 - [ ] Capture real runner timeline updates, logs, job completion, and failure
       results.
-- [ ] Preserve enough workflow/job/step metadata in the database to support the
+- [x] Preserve enough workflow/job/step metadata in the database to support the
       real runner payloads and the Web UI.
-- [ ] Keep the Python runner usable as a simulation fallback.
-- [ ] Add tests or a repeatable smoke script for success, failure, skipped
+- [x] Keep the Python runner usable as a simulation fallback.
+- [x] Add tests or a repeatable smoke script for success, failure, skipped
       dependent jobs, and log capture.
 
 ## Files Likely Involved
@@ -60,3 +61,21 @@ Pending
   environments only.
 - Do not grow the Python runner into a full Actions runtime unless the real
   runner path is proven infeasible or too expensive for the project's needs.
+- Added `runner-real/Dockerfile`, `runner-real/entrypoint.sh`, and the
+  `actions-real-runner` compose profile as the concrete real-runner spike
+  artifact.
+- Workflow job step JSON now preserves `run`, `shell`, `env`,
+  `working-directory`, `uses`, and `with` keys so the server no longer discards
+  the minimum payload needed by a runner.
+- The Python fallback runner now executes local shell `run:` steps and uploads
+  captured logs, but this does not prove upstream `actions/runner`
+  compatibility.
+- Added pool-scoped distributed-task endpoints matching the shape in
+  `specs/github-actions.md`:
+  sessions, messages, job request accept/update, timelines, timeline records,
+  and timeline log upload.
+- Added `tests/test_actions_execution.py` coverage for:
+  custom runner success and log capture, failure with skipped dependent jobs,
+  and pool-scoped protocol registration/session/message/timeline/log/completion.
+- Verification: `uv run --with pytest --with pytest-asyncio pytest tests/ -v`
+  passed 234 tests.

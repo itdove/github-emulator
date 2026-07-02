@@ -21,6 +21,7 @@ Actions visibility and runner evaluation.
 ## Completed Tasks
 
 - `docs/tasks/done/actions-visible-api-and-web-ui.md`
+- `docs/tasks/done/admin-repos-import-api.md`
 
 ## Milestones
 

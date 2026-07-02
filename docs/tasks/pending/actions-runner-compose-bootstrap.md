@@ -19,17 +19,17 @@ The runner cannot register unless a valid admin PAT is supplied through
 
 ## Acceptance Criteria
 
-- [ ] Document the exact bootstrap sequence for `docker compose up` with the
+- [x] Document the exact bootstrap sequence for `docker compose up` with the
       runner enabled.
-- [ ] Provide a Makefile target or script that creates the runner token and
+- [x] Provide a Makefile target or script that creates the runner token and
       writes an `.env` value or prints export commands.
-- [ ] Document how to choose `RUNNER_REPO`.
-- [ ] Runner service fails clearly when token or repo is missing.
+- [x] Document how to choose `RUNNER_REPO`.
+- [x] Runner service fails clearly when token or repo is missing.
 - [ ] Smoke test path proves runner registration, heartbeat, job polling, job
       completion, and UI visibility.
-- [ ] Smoke test starts from Docker Compose and records the exact command
+- [x] Smoke test starts from Docker Compose and records the exact command
       sequence.
-- [ ] Playwright desktop validation can run against the compose-served UI after
+- [x] Playwright desktop validation can run against the compose-served UI after
       the runner creates or completes at least one job.
 
 ## Files Likely Involved
@@ -50,3 +50,10 @@ Pending
 
 - This task should happen after the UI can show runner state, otherwise the
   bootstrap success signal is only log output.
+- Implemented `scripts/actions-compose-bootstrap.sh`, `make
+  actions-runner-env`, and README instructions for default and custom
+  `RUNNER_REPO` values.
+- Added `scripts/actions-ui-smoke-playwright.py` and `make actions-ui-smoke`
+  for desktop UI validation once a compose stack is running.
+- Live Docker Compose validation remains open in this environment because the
+  available Docker/Podman installation has no compose provider.
