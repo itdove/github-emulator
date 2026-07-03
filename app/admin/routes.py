@@ -29,6 +29,7 @@ from app.models.user import User
 from app.models.import_job import ImportJob
 from app.services.auth_service import hash_password, verify_password
 from app.services.import_service import start_single_import, start_bulk_import
+from app.services.repo_service import delete_repo as delete_repository
 from app.services.user_service import create_token, create_user
 
 # ---------------------------------------------------------------------------
@@ -571,8 +572,7 @@ async def delete_repo(
     result = await db.execute(select(Repository).where(Repository.id == repo_id))
     repo = result.scalar_one_or_none()
     if repo:
-        await db.delete(repo)
-        await db.commit()
+        await delete_repository(db, repo)
 
     return RedirectResponse(url="/admin/repos", status_code=302)
 

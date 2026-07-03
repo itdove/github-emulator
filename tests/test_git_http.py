@@ -6,7 +6,9 @@ a running server; these tests validate the HTTP-level behavior.
 """
 
 import pytest
+from sqlalchemy import select
 
+from app.models.repository import Repository
 from tests.conftest import auth_headers
 
 API = "/api/v3"
@@ -55,6 +57,42 @@ async def test_info_refs_receive_pack_with_auth(client, test_user, test_token, g
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "application/x-git-receive-pack-advertisement"
     assert b"# service=git-receive-pack" in resp.content
+
+
+@pytest.mark.asyncio
+async def test_info_refs_receive_pack_with_many_refs(client, db_session, test_token, git_repo):
+    """Authenticated receive-pack discovery handles large ref advertisements."""
+    repo = (await db_session.execute(
+        select(Repository).where(Repository.full_name == "testuser/git-test")
+    )).scalar_one()
+
+    import asyncio
+
+    head_proc = await asyncio.create_subprocess_exec(
+        "git", "--git-dir", repo.disk_path, "rev-parse", "refs/heads/main",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, _ = await head_proc.communicate()
+    head = stdout.decode().strip()
+    assert head
+
+    for index in range(600):
+        proc = await asyncio.create_subprocess_exec(
+            "git", "--git-dir", repo.disk_path, "update-ref",
+            f"refs/heads/synthetic/{index:04d}", head,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await proc.communicate()
+
+    resp = await client.get(
+        "/testuser/git-test.git/info/refs?service=git-receive-pack",
+        headers=auth_headers(test_token),
+    )
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/x-git-receive-pack-advertisement"
+    assert b"refs/heads/synthetic/0599" in resp.content
 
 
 @pytest.mark.asyncio
@@ -120,6 +158,51 @@ async def test_receive_pack_with_auth(client, test_user, test_token, git_repo):
     )
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "application/x-git-receive-pack-result"
+
+
+@pytest.mark.asyncio
+async def test_receive_pack_uses_spooled_body_and_defers_post_push(
+    client, test_token, git_repo, monkeypatch, tmp_path,
+):
+    """Large push handling should avoid request.body() and defer side effects."""
+    from app.git import smart_http
+
+    spooled_path = tmp_path / "receive-pack-body"
+    post_push_called = False
+
+    async def fake_spool_request_body(request):
+        spooled_path.write_bytes(b"0000")
+        return str(spooled_path)
+
+    async def fake_run_git_command_from_file(args, repo_path, input_path):
+        assert input_path == str(spooled_path)
+        assert spooled_path.exists()
+        return 0, b"0008ok\n", b""
+
+    async def fake_post_receive_pack_tasks(repo_id, user_id):
+        nonlocal post_push_called
+        post_push_called = True
+
+    monkeypatch.setattr(smart_http, "_spool_request_body", fake_spool_request_body)
+    monkeypatch.setattr(smart_http, "_run_git_command_from_file", fake_run_git_command_from_file)
+    monkeypatch.setattr(smart_http, "_post_receive_pack_tasks", fake_post_receive_pack_tasks)
+
+    resp = await client.post(
+        "/testuser/git-test.git/git-receive-pack",
+        content=b"x" * (2 * 1024 * 1024),
+        headers=auth_headers(test_token),
+    )
+    assert resp.status_code == 200
+    assert resp.content == b"0008ok\n"
+    assert not spooled_path.exists()
+
+    import asyncio
+
+    for _ in range(10):
+        if post_push_called:
+            break
+        await asyncio.sleep(0)
+    assert post_push_called
 
 
 @pytest.mark.asyncio

@@ -11,7 +11,10 @@ Reference: https://git-scm.com/docs/http-protocol
 """
 
 import asyncio
+import contextlib
 import os
+import tempfile
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
@@ -161,6 +164,102 @@ async def _stream_git_command(
     await proc.wait()
 
 
+async def _spool_request_body(request: Request) -> str:
+    """Write a possibly large request body to a temporary file."""
+    fd, path = tempfile.mkstemp(prefix="git-receive-pack-", suffix=".pack")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            async for chunk in request.stream():
+                if chunk:
+                    f.write(chunk)
+        return path
+    except Exception:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(path)
+        raise
+
+
+async def _run_git_command_from_file(
+    args: list[str],
+    repo_path: str,
+    input_path: str,
+) -> tuple[int, bytes, bytes]:
+    """Run a git command with stdin read incrementally from a file."""
+    env = os.environ.copy()
+    env["GIT_DIR"] = repo_path
+
+    proc = await asyncio.create_subprocess_exec(
+        *args,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+    )
+
+    async def write_stdin() -> None:
+        try:
+            with open(input_path, "rb") as f:
+                while True:
+                    chunk = f.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    proc.stdin.write(chunk)
+                    await proc.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        finally:
+            with contextlib.suppress(Exception):
+                proc.stdin.close()
+                await proc.stdin.wait_closed()
+
+    stdin_task = asyncio.create_task(write_stdin())
+    stdout, stderr = await asyncio.gather(proc.stdout.read(), proc.stderr.read())
+    exit_code = await proc.wait()
+    with contextlib.suppress(asyncio.CancelledError, Exception):
+        await stdin_task
+    return exit_code, stdout, stderr
+
+
+async def _post_receive_pack_tasks(repo_id: int, user_id: int | None) -> None:
+    """Run expensive post-push side effects outside the Git HTTP response path."""
+    from sqlalchemy import select
+
+    from app.database import async_session
+
+    async with async_session() as db:
+        result = await db.execute(select(Repository).where(Repository.id == repo_id))
+        repository = result.scalar_one_or_none()
+        if repository is None:
+            return
+
+        user = None
+        if user_id is not None:
+            user_result = await db.execute(select(User).where(User.id == user_id))
+            user = user_result.scalar_one_or_none()
+
+        repository.pushed_at = datetime.now(timezone.utc)
+        await db.commit()
+
+        try:
+            await _sync_branches_to_db(db, repository)
+        except Exception:
+            pass
+
+        try:
+            from app.services.index_service import index_repository
+
+            await index_repository(db, repository)
+        except Exception:
+            pass
+
+        try:
+            from app.services.workflow_service import process_push_event
+
+            await process_push_event(db, repository, user)
+        except Exception:
+            pass
+
+
 @router.get("/{owner}/{repo_name}/info/refs")
 @router.get("/{owner}/{repo_name}.git/info/refs")
 async def info_refs(
@@ -268,40 +367,21 @@ async def git_receive_pack(
     if not os.path.isdir(repo_path):
         raise HTTPException(status_code=404, detail="Repository not found on disk")
 
-    input_data = await request.body()
-
-    # Run receive-pack
-    stdout, stderr = await _run_git_command(
-        ["git-receive-pack", "--stateless-rpc", repo_path],
-        repo_path,
-        input_data,
-    )
-
-    # Update pushed_at timestamp
-    from datetime import datetime, timezone
-
-    repository.pushed_at = datetime.now(timezone.utc)
-    await db.commit()
-
-    # Sync branch refs from disk into the database
+    repo_id = repository.id
+    user_id = user.id if user else None
+    input_path = await _spool_request_body(request)
     try:
-        await _sync_branches_to_db(db, repository)
-    except Exception:
-        pass  # Don't fail the push if branch sync fails
+        exit_code, stdout, stderr = await _run_git_command_from_file(
+            ["git-receive-pack", "--stateless-rpc", repo_path],
+            repo_path,
+            input_path,
+        )
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(input_path)
 
-    # Trigger search indexing in the background
-    try:
-        from app.services.index_service import index_repository
-        await index_repository(db, repository)
-    except Exception:
-        pass  # Don't fail the push if indexing fails
-
-    # Detect and trigger workflow runs
-    try:
-        from app.services.workflow_service import process_push_event
-        await process_push_event(db, repository, user)
-    except Exception:
-        pass  # Don't fail the push if workflow detection fails
+    if exit_code == 0:
+        asyncio.create_task(_post_receive_pack_tasks(repo_id, user_id))
 
     return Response(
         content=stdout,

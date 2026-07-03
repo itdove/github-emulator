@@ -1,7 +1,10 @@
 """Tests for the Repository REST API endpoints."""
 
+import os
+
 import pytest
 
+from app.config import settings
 from tests.conftest import auth_headers
 
 API = "/api/v3"
@@ -104,11 +107,15 @@ async def test_delete_repo(client, test_user, test_token):
         json={"name": "delete-test"},
         headers=auth_headers(test_token),
     )
+    disk_path = os.path.join(settings.DATA_DIR, "repos", "testuser", "delete-test.git")
+    assert os.path.isdir(disk_path)
+
     resp = await client.delete(
         f"{API}/repos/testuser/delete-test",
         headers=auth_headers(test_token),
     )
     assert resp.status_code == 204
+    assert not os.path.exists(disk_path)
 
     # Verify it's gone
     resp = await client.get(f"{API}/repos/testuser/delete-test")

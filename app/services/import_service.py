@@ -244,6 +244,8 @@ async def _do_single_import(
             # Build disk path
             disk_path = os.path.join(settings.DATA_DIR, "repos", namespace, f"{repo_name}.git")
             os.makedirs(os.path.dirname(disk_path), exist_ok=True)
+            if os.path.exists(disk_path):
+                shutil.rmtree(disk_path)
 
             # Build clone URL with token if provided
             clone_url = source_url.strip()

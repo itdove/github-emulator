@@ -14,6 +14,7 @@ from app.models.repository import Repository
 from app.models.user import User
 from app.models.organization import Organization
 from app.schemas.user import SimpleUser, _fmt_dt, _make_node_id
+from app.services.repo_service import delete_repo as delete_repository
 
 router = APIRouter(tags=["repos"])
 
@@ -285,8 +286,7 @@ async def delete_repo(owner: str, repo: str, user: AuthUser, db: DbSession):
     if user.id != repository.owner_id and not user.site_admin:
         raise HTTPException(status_code=403, detail="Must have admin rights to delete")
 
-    await db.delete(repository)
-    await db.commit()
+    await delete_repository(db, repository)
     return Response(status_code=204)
 
 

@@ -2,19 +2,30 @@
 
 import hashlib
 import secrets
+from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.api.deps import AuthUser, CurrentUser, DbSession
 from app.config import settings
+from app.middleware.error_handler import NotFoundError, ValidationError
+from app.models.import_job import ImportJob
 from app.models.user import User
 from app.models.token import PersonalAccessToken
 from app.schemas.user import UserCreate, UserResponse, UserUpdate
+from app.services.import_service import start_single_import
 
 router = APIRouter(tags=["users"])
 
 BASE = settings.BASE_URL
+
+
+class AdminRepoImportRequest(BaseModel):
+    url: str
+    owner: str
+    github_token: str | None = None
 
 
 # ---- authenticated user ---------------------------------------------------
@@ -138,3 +149,62 @@ async def admin_create_token(
         "scopes": pat.scopes,
         "created_at": pat.created_at.isoformat() + "Z" if pat.created_at else None,
     }
+
+
+def _api_timestamp(value: datetime | None) -> str | None:
+    return value.isoformat() + "Z" if value else None
+
+
+def _import_job_response(job: ImportJob, owner_login: str) -> dict:
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "source_url": job.source_url,
+        "repo_name": job.repo_name,
+        "owner": owner_login,
+        "error_message": job.error_message,
+        "created_at": _api_timestamp(job.created_at),
+        "completed_at": _api_timestamp(job.completed_at),
+    }
+
+
+@router.post("/admin/repos/import", status_code=202)
+async def admin_import_repo(body: AdminRepoImportRequest, db: DbSession):
+    """Start a server-side single-repository import for bootstrap automation."""
+    source_url = body.url.strip()
+    owner_login = body.owner.strip()
+    github_token = body.github_token.strip() if body.github_token else None
+
+    if not source_url:
+        raise ValidationError("url is required")
+    if not owner_login:
+        raise ValidationError("owner is required")
+
+    result = await db.execute(select(User).where(User.login == owner_login))
+    owner = result.scalar_one_or_none()
+    if owner is None:
+        raise NotFoundError("Owner not found")
+
+    try:
+        job = await start_single_import(db, source_url, owner.id, github_token)
+    except ValueError as exc:
+        raise ValidationError(str(exc)) from exc
+
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "source_url": job.source_url,
+        "repo_name": job.repo_name,
+        "owner": owner.login,
+    }
+
+
+@router.get("/admin/repos/import/{job_id}")
+async def admin_get_import_job(job_id: int, db: DbSession):
+    """Return status for a server-side repository import job."""
+    result = await db.execute(select(ImportJob).where(ImportJob.id == job_id))
+    job = result.scalar_one_or_none()
+    if job is None:
+        raise NotFoundError("Import job not found")
+
+    return _import_job_response(job, job.owner.login)
