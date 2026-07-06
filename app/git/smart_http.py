@@ -131,12 +131,12 @@ async def _sync_branches_to_db(
     await db.commit()
 
 
-async def _stream_git_command(
+async def _stream_git_command_from_file(
     args: list[str],
     repo_path: str,
-    input_data: bytes,
+    input_path: str,
 ):
-    """Run a git command and stream its output."""
+    """Run a git command with stdin from a file while streaming stdout."""
     env = os.environ.copy()
     env["GIT_DIR"] = repo_path
 
@@ -148,25 +148,52 @@ async def _stream_git_command(
         env=env,
     )
 
-    # Write input and close stdin
-    proc.stdin.write(input_data)
-    await proc.stdin.drain()
-    proc.stdin.close()
-    await proc.stdin.wait_closed()
+    async def write_stdin() -> None:
+        try:
+            with open(input_path, "rb") as f:
+                while True:
+                    chunk = f.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    proc.stdin.write(chunk)
+                    await proc.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        finally:
+            with contextlib.suppress(Exception):
+                proc.stdin.close()
+                await proc.stdin.wait_closed()
 
-    # Stream stdout
-    while True:
-        chunk = await proc.stdout.read(65536)
-        if not chunk:
-            break
-        yield chunk
+    async def drain_stderr() -> bytes:
+        return await proc.stderr.read()
 
-    await proc.wait()
+    stdin_task = asyncio.create_task(write_stdin())
+    stderr_task = asyncio.create_task(drain_stderr())
+    try:
+        while True:
+            chunk = await proc.stdout.read(65536)
+            if not chunk:
+                break
+            yield chunk
+
+        await proc.wait()
+        await stdin_task
+        await stderr_task
+    finally:
+        if proc.returncode is None:
+            proc.kill()
+            with contextlib.suppress(Exception):
+                await proc.wait()
+        for task in (stdin_task, stderr_task):
+            if not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
 
 
-async def _spool_request_body(request: Request) -> str:
+async def _spool_request_body(request: Request, prefix: str = "git-request-") -> str:
     """Write a possibly large request body to a temporary file."""
-    fd, path = tempfile.mkstemp(prefix="git-receive-pack-", suffix=".pack")
+    fd, path = tempfile.mkstemp(prefix=prefix, suffix=".pack")
     try:
         with os.fdopen(fd, "wb") as f:
             async for chunk in request.stream():
@@ -329,14 +356,22 @@ async def git_upload_pack(
     if not os.path.isdir(repo_path):
         raise HTTPException(status_code=404, detail="Repository not found on disk")
 
-    input_data = await request.body()
+    input_path = await _spool_request_body(request, prefix="git-upload-pack-")
+
+    async def stream_and_cleanup():
+        try:
+            async for chunk in _stream_git_command_from_file(
+                ["git-upload-pack", "--stateless-rpc", repo_path],
+                repo_path,
+                input_path,
+            ):
+                yield chunk
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(input_path)
 
     return StreamingResponse(
-        _stream_git_command(
-            ["git-upload-pack", "--stateless-rpc", repo_path],
-            repo_path,
-            input_data,
-        ),
+        stream_and_cleanup(),
         media_type="application/x-git-upload-pack-result",
         headers={
             "Cache-Control": "no-cache",
@@ -369,7 +404,7 @@ async def git_receive_pack(
 
     repo_id = repository.id
     user_id = user.id if user else None
-    input_path = await _spool_request_body(request)
+    input_path = await _spool_request_body(request, prefix="git-receive-pack-")
     try:
         exit_code, stdout, stderr = await _run_git_command_from_file(
             ["git-receive-pack", "--stateless-rpc", repo_path],

@@ -139,6 +139,47 @@ async def test_upload_pack_endpoint(client, test_user, test_token, git_repo):
 
 
 @pytest.mark.asyncio
+async def test_upload_pack_spools_request_and_streams_response(
+    client, git_repo, monkeypatch, tmp_path,
+):
+    """Clone/fetch handling should avoid request.body() and stream git output."""
+    from app.git import smart_http
+
+    spooled_path = tmp_path / "upload-pack-body"
+    called = False
+
+    async def fake_spool_request_body(request, prefix="git-request-"):
+        assert prefix == "git-upload-pack-"
+        spooled_path.write_bytes(b"0000")
+        return str(spooled_path)
+
+    async def fake_stream_git_command_from_file(args, repo_path, input_path):
+        nonlocal called
+        called = True
+        assert args[0] == "git-upload-pack"
+        assert input_path == str(spooled_path)
+        assert spooled_path.exists()
+        yield b"0008ok\n"
+
+    monkeypatch.setattr(smart_http, "_spool_request_body", fake_spool_request_body)
+    monkeypatch.setattr(
+        smart_http,
+        "_stream_git_command_from_file",
+        fake_stream_git_command_from_file,
+    )
+
+    resp = await client.post(
+        "/testuser/git-test.git/git-upload-pack",
+        content=b"0000",
+    )
+
+    assert resp.status_code == 200
+    assert resp.content == b"0008ok\n"
+    assert called
+    assert not spooled_path.exists()
+
+
+@pytest.mark.asyncio
 async def test_receive_pack_requires_auth(client, test_user, test_token, git_repo):
     """POST git-receive-pack without auth returns 401."""
     resp = await client.post(
@@ -170,7 +211,8 @@ async def test_receive_pack_uses_spooled_body_and_defers_post_push(
     spooled_path = tmp_path / "receive-pack-body"
     post_push_called = False
 
-    async def fake_spool_request_body(request):
+    async def fake_spool_request_body(request, prefix="git-request-"):
+        assert prefix == "git-receive-pack-"
         spooled_path.write_bytes(b"0000")
         return str(spooled_path)
 

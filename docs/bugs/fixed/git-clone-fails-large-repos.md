@@ -6,7 +6,12 @@ Cloning large repositories from the GitHub emulator via `git clone` fails with "
 
 ## Status
 
-Open.
+Fixed. The HTTP `git-upload-pack` endpoint no longer reads the request body
+into memory with `request.body()` and no longer depends on a response iterator
+consuming the ASGI request stream after the endpoint returns. It now spools the
+fetch/clone request to a temporary file, feeds that file to `git-upload-pack`,
+streams stdout back as `application/x-git-upload-pack-result`, drains stderr,
+and removes the temporary file after the response stream finishes.
 
 ## Steps to Reproduce
 
@@ -50,13 +55,35 @@ git -c http.extraHeader="Authorization: token ghp_<ADMIN_TOKEN>" \
 
 ## Suspected Causes
 
-1. **Upload-pack response buffering** — The Smart HTTP `git-upload-pack` handler likely buffers the full pack response in memory before sending, causing timeouts or OOM for large repos. The push path had an analogous issue (fixed by spooling to a temp file and async post-processing).
-2. **Proxy timeout** — Caddy reverse proxy may time out waiting for the emulator to generate the full pack for large repos.
+1. **Confirmed: upload-pack request buffering and fragile stream timing**. The
+   handler read the whole request body before invoking `git-upload-pack`. A
+   direct request-streaming attempt avoided memory buffering but exposed an ASGI
+   middleware deadlock risk when consuming `request.stream()` from the response
+   iterator. The fixed path spools the request before returning the
+   `StreamingResponse`.
+2. **Mitigated: large pack response pressure**. The response remains streamed in
+   64 KiB chunks from `git-upload-pack` stdout instead of being accumulated in
+   memory.
+3. **Possible external factor: proxy timeout**. Reverse proxies can still time
+   out if Git itself takes too long before emitting response bytes, but the
+   emulator no longer adds full request buffering or response accumulation to
+   that path.
 
 ## Notes
 
 - The push path (`git-receive-pack`) was fixed in `git-push-fails-large-repos.md` by spooling the request to disk and running post-push work async. A similar streaming approach for `git-upload-pack` responses would likely fix this.
 - Discovered during eval job `eval-arch-context-accuracy-opus-0703-143610` on 2026-07-03.
+- Fixed by applying the same disk-spooling principle to upload-pack request
+  input while preserving streamed stdout for the pack response.
+
+## Verification
+
+- `uv run pytest tests/test_git_http.py tests/test_git_integration.py -v`
+  passed: 19 tests.
+- Added regression coverage:
+  `test_upload_pack_spools_request_and_streams_response` asserts upload-pack
+  uses a spooled request body, streams the git response, and removes the temp
+  file after the response completes.
 
 ## Environment
 
