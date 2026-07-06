@@ -5,6 +5,9 @@ endpoints respond correctly. Full git clone/push integration requires
 a running server; these tests validate the HTTP-level behavior.
 """
 
+import gzip
+import os
+
 import pytest
 from sqlalchemy import select
 
@@ -177,6 +180,27 @@ async def test_upload_pack_spools_request_and_streams_response(
     assert resp.content == b"0008ok\n"
     assert called
     assert not spooled_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_spool_request_body_decodes_gzip():
+    """Git clients may gzip Smart HTTP request bodies."""
+    from app.git import smart_http
+
+    class Request:
+        headers = {"content-encoding": "gzip"}
+
+        async def stream(self):
+            body = gzip.compress(b"0000")
+            yield body[:3]
+            yield body[3:]
+
+    path = await smart_http._spool_request_body(Request(), prefix="git-test-")
+    try:
+        with open(path, "rb") as f:
+            assert f.read() == b"0000"
+    finally:
+        os.unlink(path)
 
 
 @pytest.mark.asyncio

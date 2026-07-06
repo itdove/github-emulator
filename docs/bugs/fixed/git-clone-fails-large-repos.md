@@ -11,7 +11,9 @@ into memory with `request.body()` and no longer depends on a response iterator
 consuming the ASGI request stream after the endpoint returns. It now spools the
 fetch/clone request to a temporary file, feeds that file to `git-upload-pack`,
 streams stdout back as `application/x-git-upload-pack-result`, drains stderr,
-and removes the temporary file after the response stream finishes.
+and removes the temporary file after the response stream finishes. The shared
+spooling path also decodes gzip-encoded Git Smart HTTP request bodies before
+passing them to Git.
 
 ## Steps to Reproduce
 
@@ -68,6 +70,11 @@ git -c http.extraHeader="Authorization: token ghp_<ADMIN_TOKEN>" \
    out if Git itself takes too long before emitting response bytes, but the
    emulator no longer adds full request buffering or response accumulation to
    that path.
+4. **Confirmed after live trace: gzipped upload-pack requests**. `git clone`
+   against `github.local` sent `Content-Encoding: gzip` on
+   `POST /git-upload-pack`. The emulator previously passed those compressed
+   bytes directly to Git, which caused the server side to close a nominally
+   successful HTTP 200 response without a valid pack stream.
 
 ## Notes
 
@@ -75,15 +82,25 @@ git -c http.extraHeader="Authorization: token ghp_<ADMIN_TOKEN>" \
 - Discovered during eval job `eval-arch-context-accuracy-opus-0703-143610` on 2026-07-03.
 - Fixed by applying the same disk-spooling principle to upload-pack request
   input while preserving streamed stdout for the pack response.
+- Fixed gzip handling by decoding compressed Smart HTTP request bodies in the
+  shared spooling helper before upload-pack or receive-pack receives stdin.
 
 ## Verification
 
 - `uv run pytest tests/test_git_http.py tests/test_git_integration.py -v`
-  passed: 19 tests.
+  passed: 20 tests.
 - Added regression coverage:
   `test_upload_pack_spools_request_and_streams_response` asserts upload-pack
   uses a spooled request body, streams the git response, and removes the temp
   file after the response completes.
+- Added `test_spool_request_body_decodes_gzip` to cover Git clients that gzip
+  Smart HTTP request bodies.
+- Live deployed recheck after rebuild on 2026-07-06:
+  `git -c http.sslVerify=false clone https://github.local/opendatahub-io/agent-eval-harness.git /tmp/agent-eval-harness-clone-recheck-20260706-1`
+  completed successfully. The clone was on branch `main` at
+  `b4299b8f0609479a96074537809c6841ebbec4a0`, and expected files such as
+  `README.md`, `pyproject.toml`, `agent_eval/`, `tests/`, and `.github/` were
+  present.
 
 ## Environment
 

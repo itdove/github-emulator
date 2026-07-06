@@ -14,6 +14,7 @@ import asyncio
 import contextlib
 import os
 import tempfile
+import zlib
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -193,12 +194,29 @@ async def _stream_git_command_from_file(
 
 async def _spool_request_body(request: Request, prefix: str = "git-request-") -> str:
     """Write a possibly large request body to a temporary file."""
+    content_encoding = request.headers.get("content-encoding", "").lower()
+    encodings = [value.strip() for value in content_encoding.split(",") if value.strip()]
+    decompressor = None
+    if encodings in ([], ["identity"]):
+        pass
+    elif encodings in (["gzip"], ["x-gzip"]):
+        decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    else:
+        raise HTTPException(status_code=415, detail="Unsupported Git request encoding")
+
     fd, path = tempfile.mkstemp(prefix=prefix, suffix=".pack")
     try:
         with os.fdopen(fd, "wb") as f:
             async for chunk in request.stream():
                 if chunk:
-                    f.write(chunk)
+                    if decompressor is not None:
+                        chunk = decompressor.decompress(chunk)
+                    if chunk:
+                        f.write(chunk)
+            if decompressor is not None:
+                tail = decompressor.flush()
+                if tail:
+                    f.write(tail)
         return path
     except Exception:
         with contextlib.suppress(FileNotFoundError):
