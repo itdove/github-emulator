@@ -5,7 +5,7 @@
     Expects: owner, repo (Repository object), url_prefix, active_tab
     Optional: open_issues_count, open_pulls_count
 -#}
-{% from "_octicons.html" import repo_icon, code, issue_opened, git_pull_request, lock %}
+{% from "_octicons.html" import repo_icon, code, issue_opened, git_pull_request, history, lock %}
 
 {# ---- Repo header breadcrumb ---- #}
 <div class="mb-3">
@@ -45,6 +45,11 @@
             {% if open_pulls_count is defined and open_pulls_count %}
             <span class="Counter">{{ open_pulls_count }}</span>
             {% endif %}
+        </a>
+        <a class="UnderlineNav-item{% if active_tab == 'actions' %} selected{% endif %}"
+           href="{{ url_prefix }}/{{ owner }}/{{ repo.name }}/actions">
+            <span class="UnderlineNav-octicon">{{ history(16) }}</span>
+            <span>Actions</span>
         </a>
     </div>
 </nav>

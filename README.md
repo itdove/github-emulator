@@ -169,6 +169,60 @@ gh issue create --repo admin/my-repo --title "Test" --body "Hello"
 > extract Caddy's root CA certificate from the container and add it to your
 > system trust store instead. See the Caddy documentation for details.
 
+### View GitHub Actions jobs in the Web UI
+
+The repository Actions UI is available at:
+
+```text
+http://localhost:8000/ui/<owner>/<repo>/actions
+```
+
+The Docker Compose stack includes an `actions-runner` service. Bootstrap its
+token and default repository, then start the runner:
+
+```bash
+make up
+make actions-runner-env
+docker compose up -d actions-runner
+```
+
+By default the runner watches `admin/test-repo`. Override it with:
+
+```bash
+RUNNER_REPO=admin/my-repo make actions-runner-env
+docker compose up -d actions-runner
+```
+
+The project roadmap prefers real `actions/runner` compatibility for maximum
+fidelity, but the bundled Python runner is kept as the deterministic fallback.
+It executes local shell `run:` steps that the emulator stores in the job payload
+and uploads the captured logs.
+
+An opt-in compose profile builds the upstream `actions/runner` binary for the
+compatibility spike:
+
+```bash
+make up
+make actions-runner-env
+make actions-real-runner
+# equivalent:
+docker compose --profile real-runner up --build actions-real-runner
+```
+
+This real-runner path is the intended compatibility target. The current
+emulator still needs protocol validation for real runner registration, session
+message polling, timeline updates, log upload, and completion before it can
+replace the Python fallback.
+
+Desktop Playwright validation can be run against the compose-served UI after a
+workflow run exists:
+
+```bash
+python -m pip install playwright
+python -m playwright install chromium
+make actions-ui-smoke
+```
+
 ## Makefile Targets
 
 ### Docker (local)
@@ -182,6 +236,9 @@ gh issue create --repo admin/my-repo --title "Test" --body "Hello"
 | `logs` | Tail container logs |
 | `test` | Run pytest locally |
 | `smoke` | End-to-end smoke test against the running server |
+| `actions-runner-env` | Create `.env` values for the compose Actions runner |
+| `actions-real-runner` | Start the opt-in real `actions/runner` compose profile |
+| `actions-ui-smoke` | Run desktop Playwright smoke test against Actions UI |
 | `clean` | Remove containers, images, and build artifacts |
 
 ### Vagrant

@@ -41,9 +41,10 @@ simulation.
   `actions-runner` service.
 - `make actions-ui-smoke` runs desktop Playwright validation against a live UI
   when Playwright and a running stack are available.
-- The real `actions/runner` profile exists, but real runner registration,
-  session polling, timeline updates, logs, and completion are not yet verified
-  against the emulator.
+- The real `actions/runner` profile exists. A live upstream runner validation
+  proved registration, OAuth/session polling, job claim, shell step execution,
+  timeline/feed/log upload endpoints, completion, and persisted run/job/step/log
+  visibility against the emulator.
 - Protocol-level tests cover the emulator's pool-scoped distributed-task
   registration/session/message/timeline/log/completion flow without launching
   the upstream runner binary.
@@ -91,12 +92,12 @@ Those pages should show enough state to understand:
    Complete.
 6. Prioritize a real `actions/runner` compatibility spike before expanding the
    Python runner into a larger execution engine.
-   Real-runner compose artifact exists; pool-scoped protocol tests pass;
-   upstream runner binary verification pending.
+   Complete: real-runner compose artifact exists; pool-scoped protocol tests
+   pass; upstream runner binary validation completed with run 14.
 7. Complete hosted-runner feasibility research before spending time trying to
    route emulator jobs to GitHub-owned runners.
-   Accepted runner-strategy ADR complete; real-runner protocol spike still
-   pending.
+   Accepted runner-strategy ADR complete; real-runner compatibility is the
+   validated execution direction.
 
 ## Non-Goals For First Visibility Milestone
 
@@ -132,7 +133,12 @@ Those pages should show enough state to understand:
   Complete at ADR level: `docs/decisions/ADR-0001-actions-runner-strategy.md`
   accepts real `actions/runner` compatibility over GitHub-owned hosted runners.
 - Real `actions/runner` spike result.
-  Pending: `runner-real/` and the `actions-real-runner` compose profile exist,
-  and pool-scoped distributed-task protocol tests pass. This environment cannot
-  build/run compose and the upstream runner binary has not yet proven
-  registration or job execution.
+  Complete: using `scripts/actions-real-runner-api.sh`,
+  `scripts/actions-real-runner-container.sh`, and
+  `scripts/actions_queue_smoke_run.py`, upstream runner 2.317.0 registered as
+  `real-runner-1`, polled session messages, claimed job 14, executed
+  `echo real-runner-smoke`, posted feed/log/timeline updates, and completed the
+  job successfully. The SQLite smoke database recorded run 14 and job 14 as
+  `completed`/`success`, the `Say hello` step as `completed`/`success`, and
+  `/tmp/ghemu-actions-real-runner/logs/jobs/14.log` contained
+  `real-runner-smoke`.

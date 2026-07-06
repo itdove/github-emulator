@@ -19,6 +19,12 @@ from app.services.auth_service import hash_token
 router = APIRouter(tags=["actions-pipelines"])
 
 
+def _is_expired(value: datetime) -> bool:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value < datetime.now(timezone.utc)
+
+
 @router.post("/_services/pipelines/{owner}/{repo}/_apis/pipelines/runs/register")
 async def pipelines_register_runner(
     owner: str, repo: str, request: Request, db: DbSession,
@@ -39,7 +45,7 @@ async def pipelines_register_runner(
     reg = result.scalar_one_or_none()
     if reg is None:
         raise HTTPException(status_code=401, detail="Invalid registration token")
-    if reg.expires_at < datetime.now(timezone.utc):
+    if _is_expired(reg.expires_at):
         raise HTTPException(status_code=401, detail="Registration token expired")
 
     runner_name = body.get("name", body.get("agentName", "runner"))

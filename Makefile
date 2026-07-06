@@ -1,4 +1,4 @@
-.PHONY: help build up down restart logs test smoke clean
+.PHONY: help build up down restart logs test smoke actions-runner-env actions-real-runner actions-ui-smoke clean
 
 .DEFAULT_GOAL := help
 
@@ -89,6 +89,20 @@ smoke:
 	@rm -rf /tmp/smoke-clone /tmp/smoke-verify
 	@echo ""
 	@echo "=== Smoke test complete ==="
+
+## Create .env values for the compose actions-runner service
+actions-runner-env:
+	./scripts/actions-compose-bootstrap.sh
+
+## Start the opt-in real actions/runner compose profile
+actions-real-runner:
+	docker compose --profile real-runner up --build actions-real-runner
+
+## Run desktop Playwright smoke test against a running compose stack
+actions-ui-smoke:
+	python3 scripts/actions-ui-smoke-playwright.py \
+		--base-url "$${GITHUB_EMULATOR_UI_URL:-http://localhost:8000}" \
+		--repo "$${RUNNER_REPO:-admin/test-repo}"
 
 ## Remove all build artifacts
 clean: down

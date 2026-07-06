@@ -1,6 +1,9 @@
 """Actions endpoints -- workflows, runs, jobs, secrets, variables."""
 
+import os
+
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import PlainTextResponse
 from sqlalchemy import select, func
 
 from app.api.deps import AuthUser, CurrentUser, DbSession, get_repo_or_404
@@ -13,6 +16,79 @@ router = APIRouter(tags=["actions"])
 BASE = settings.BASE_URL
 
 
+def _workflow_json(w: Workflow, owner: str, repo: str) -> dict:
+    api = f"{BASE}/api/v3"
+    return {
+        "id": w.id,
+        "node_id": _make_node_id("Workflow", w.id),
+        "name": w.name,
+        "path": w.path,
+        "state": w.state,
+        "created_at": _fmt_dt(w.created_at),
+        "updated_at": _fmt_dt(w.updated_at),
+        "url": f"{api}/repos/{owner}/{repo}/actions/workflows/{w.id}",
+        "html_url": f"{BASE}/{owner}/{repo}/actions/workflows/{w.path}",
+        "badge_url": f"{BASE}/{owner}/{repo}/workflows/{w.name}/badge.svg",
+    }
+
+
+def _run_json(r: WorkflowRun, owner: str, repo: str) -> dict:
+    api = f"{BASE}/api/v3"
+    actor = SimpleUser.from_db(r.actor, BASE).model_dump() if r.actor else None
+    return {
+        "id": r.id,
+        "name": r.workflow.name if r.workflow else "",
+        "head_branch": r.head_branch,
+        "head_sha": r.head_sha,
+        "run_number": r.run_number,
+        "run_attempt": r.run_attempt,
+        "event": r.event,
+        "status": r.status,
+        "conclusion": r.conclusion,
+        "workflow_id": r.workflow_id,
+        "url": f"{api}/repos/{owner}/{repo}/actions/runs/{r.id}",
+        "html_url": f"{BASE}/{owner}/{repo}/actions/runs/{r.id}",
+        "created_at": _fmt_dt(r.created_at),
+        "updated_at": _fmt_dt(r.updated_at),
+        "actor": actor,
+    }
+
+
+def _job_json(j: WorkflowJob, owner: str, repo: str) -> dict:
+    api = f"{BASE}/api/v3"
+    return {
+        "id": j.id,
+        "run_id": j.run_id,
+        "name": j.name,
+        "workflow_name": j.workflow_name,
+        "status": j.status,
+        "conclusion": j.conclusion,
+        "started_at": _fmt_dt(j.started_at),
+        "completed_at": _fmt_dt(j.completed_at),
+        "steps": j.steps or [],
+        "runner_name": j.runner_name,
+        "runner_id": j.runner_id,
+        "labels": j.labels or [],
+        "run_attempt": j.run_attempt,
+        "needs": j.needs or [],
+        "url": f"{api}/repos/{owner}/{repo}/actions/jobs/{j.id}",
+        "html_url": f"{BASE}/{owner}/{repo}/actions/jobs/{j.id}",
+        "logs_url": f"{api}/repos/{owner}/{repo}/actions/jobs/{j.id}/logs",
+    }
+
+
+def _job_log_path(job_id: int) -> str:
+    return os.path.join(settings.DATA_DIR, "logs", "jobs", f"{job_id}.log")
+
+
+def _check_read_access(repository, current_user) -> None:
+    if repository.private and (
+        current_user is None
+        or (current_user.id != repository.owner_id and not current_user.site_admin)
+    ):
+        raise HTTPException(status_code=404, detail="Not Found")
+
+
 # --- Workflows ---
 
 @router.get("/repos/{owner}/{repo}/actions/workflows")
@@ -23,6 +99,7 @@ async def list_workflows(
 ):
     """List workflows."""
     repository = await get_repo_or_404(owner, repo, db)
+    _check_read_access(repository, current_user)
     query = (
         select(Workflow)
         .where(Workflow.repo_id == repository.id)
@@ -30,21 +107,7 @@ async def list_workflows(
         .limit(per_page)
     )
     workflows = (await db.execute(query)).scalars().all()
-    api = f"{BASE}/api/v3"
-    items = []
-    for w in workflows:
-        items.append({
-            "id": w.id,
-            "node_id": _make_node_id("Workflow", w.id),
-            "name": w.name,
-            "path": w.path,
-            "state": w.state,
-            "created_at": _fmt_dt(w.created_at),
-            "updated_at": _fmt_dt(w.updated_at),
-            "url": f"{api}/repos/{owner}/{repo}/actions/workflows/{w.id}",
-            "html_url": f"{BASE}/{owner}/{repo}/actions/workflows/{w.path}",
-            "badge_url": f"{BASE}/{owner}/{repo}/workflows/{w.name}/badge.svg",
-        })
+    items = [_workflow_json(w, owner, repo) for w in workflows]
     return {"total_count": len(items), "workflows": items}
 
 
@@ -54,18 +117,14 @@ async def get_workflow(
 ):
     """Get a workflow."""
     repository = await get_repo_or_404(owner, repo, db)
+    _check_read_access(repository, current_user)
     result = await db.execute(
         select(Workflow).where(Workflow.id == workflow_id, Workflow.repo_id == repository.id)
     )
     w = result.scalar_one_or_none()
     if w is None:
         raise HTTPException(status_code=404, detail="Not Found")
-    api = f"{BASE}/api/v3"
-    return {
-        "id": w.id, "name": w.name, "path": w.path, "state": w.state,
-        "url": f"{api}/repos/{owner}/{repo}/actions/workflows/{w.id}",
-        "created_at": _fmt_dt(w.created_at), "updated_at": _fmt_dt(w.updated_at),
-    }
+    return _workflow_json(w, owner, repo)
 
 
 # --- Workflow runs ---
@@ -78,6 +137,7 @@ async def list_workflow_runs(
 ):
     """List workflow runs."""
     repository = await get_repo_or_404(owner, repo, db)
+    _check_read_access(repository, current_user)
     query = (
         select(WorkflowRun)
         .where(WorkflowRun.repo_id == repository.id)
@@ -86,27 +146,7 @@ async def list_workflow_runs(
         .limit(per_page)
     )
     runs = (await db.execute(query)).scalars().all()
-    api = f"{BASE}/api/v3"
-    items = []
-    for r in runs:
-        actor = SimpleUser.from_db(r.actor, BASE).model_dump() if r.actor else None
-        items.append({
-            "id": r.id,
-            "name": r.workflow.name if r.workflow else "",
-            "head_branch": r.head_branch,
-            "head_sha": r.head_sha,
-            "run_number": r.run_number,
-            "run_attempt": r.run_attempt,
-            "event": r.event,
-            "status": r.status,
-            "conclusion": r.conclusion,
-            "workflow_id": r.workflow_id,
-            "url": f"{api}/repos/{owner}/{repo}/actions/runs/{r.id}",
-            "html_url": f"{BASE}/{owner}/{repo}/actions/runs/{r.id}",
-            "created_at": _fmt_dt(r.created_at),
-            "updated_at": _fmt_dt(r.updated_at),
-            "actor": actor,
-        })
+    items = [_run_json(r, owner, repo) for r in runs]
     return {"total_count": len(items), "workflow_runs": items}
 
 
@@ -116,20 +156,14 @@ async def get_workflow_run(
 ):
     """Get a workflow run."""
     repository = await get_repo_or_404(owner, repo, db)
+    _check_read_access(repository, current_user)
     result = await db.execute(
         select(WorkflowRun).where(WorkflowRun.id == run_id, WorkflowRun.repo_id == repository.id)
     )
     r = result.scalar_one_or_none()
     if r is None:
         raise HTTPException(status_code=404, detail="Not Found")
-    api = f"{BASE}/api/v3"
-    return {
-        "id": r.id, "status": r.status, "conclusion": r.conclusion,
-        "head_sha": r.head_sha, "head_branch": r.head_branch,
-        "event": r.event, "run_number": r.run_number,
-        "url": f"{api}/repos/{owner}/{repo}/actions/runs/{r.id}",
-        "created_at": _fmt_dt(r.created_at), "updated_at": _fmt_dt(r.updated_at),
-    }
+    return _run_json(r, owner, repo)
 
 
 @router.post("/repos/{owner}/{repo}/actions/runs/{run_id}/cancel", status_code=202)
@@ -191,7 +225,11 @@ async def rerun_workflow(
             workflow_name=old_job.workflow_name,
             status="queued" if not old_job.needs else "waiting",
             steps=[
-                {"number": s["number"], "name": s["name"], "status": "queued", "conclusion": None}
+                {
+                    **s,
+                    "status": "queued",
+                    "conclusion": None,
+                }
                 for s in (old_job.steps or [])
             ],
             labels=old_job.labels,
@@ -217,18 +255,66 @@ async def list_jobs(
 ):
     """List jobs for a workflow run."""
     repository = await get_repo_or_404(owner, repo, db)
+    _check_read_access(repository, current_user)
+    run_result = await db.execute(
+        select(WorkflowRun).where(
+            WorkflowRun.id == run_id,
+            WorkflowRun.repo_id == repository.id,
+        )
+    )
+    if run_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Not Found")
+
     query = select(WorkflowJob).where(WorkflowJob.run_id == run_id)
     jobs = (await db.execute(query)).scalars().all()
-    api = f"{BASE}/api/v3"
-    items = []
-    for j in jobs:
-        items.append({
-            "id": j.id, "name": j.name, "status": j.status,
-            "conclusion": j.conclusion, "started_at": _fmt_dt(j.started_at),
-            "completed_at": _fmt_dt(j.completed_at), "steps": j.steps or [],
-            "url": f"{api}/repos/{owner}/{repo}/actions/jobs/{j.id}",
-        })
+    items = [_job_json(j, owner, repo) for j in jobs]
     return {"total_count": len(items), "jobs": items}
+
+
+@router.get("/repos/{owner}/{repo}/actions/jobs/{job_id}")
+async def get_job(
+    owner: str, repo: str, job_id: int, db: DbSession, current_user: CurrentUser,
+):
+    """Get a workflow job."""
+    repository = await get_repo_or_404(owner, repo, db)
+    _check_read_access(repository, current_user)
+    result = await db.execute(
+        select(WorkflowJob)
+        .join(WorkflowRun, WorkflowJob.run_id == WorkflowRun.id)
+        .where(
+            WorkflowJob.id == job_id,
+            WorkflowRun.repo_id == repository.id,
+        )
+    )
+    job = result.scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail="Not Found")
+    return _job_json(job, owner, repo)
+
+
+@router.get("/repos/{owner}/{repo}/actions/jobs/{job_id}/logs")
+async def get_job_logs(
+    owner: str, repo: str, job_id: int, db: DbSession, current_user: CurrentUser,
+):
+    """Get captured logs for a workflow job."""
+    repository = await get_repo_or_404(owner, repo, db)
+    _check_read_access(repository, current_user)
+    result = await db.execute(
+        select(WorkflowJob)
+        .join(WorkflowRun, WorkflowJob.run_id == WorkflowRun.id)
+        .where(
+            WorkflowJob.id == job_id,
+            WorkflowRun.repo_id == repository.id,
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    log_path = _job_log_path(job_id)
+    if not os.path.isfile(log_path):
+        raise HTTPException(status_code=404, detail="Logs not found")
+    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+        return PlainTextResponse(f.read())
 
 
 # --- Secrets ---

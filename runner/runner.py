@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Lightweight GitHub Actions runner for the GitHub Emulator.
 
-Registers with the emulator, polls for jobs, executes shell steps,
+Registers with the emulator, polls for jobs, executes local shell `run:` steps,
 and reports results back. Requires only httpx + stdlib.
 
 Environment variables:
@@ -119,18 +119,22 @@ class RunnerClient:
         os.makedirs(WORKDIR, exist_ok=True)
         steps = job.get("steps", [])
         all_passed = True
+        log_lines = [f"Job {job_id}: {job.get('name', '')}\n"]
 
         for step in steps:
             step_num = step.get("number", 0)
             step_name = step.get("name", f"Step {step_num}")
             log.info("  Step %d: %s", step_num, step_name)
+            log_lines.append(f"\n##[group]Step {step_num}: {step_name}\n")
 
             step["status"] = "in_progress"
             self._report_progress(job_id, steps)
 
-            result = self._run_step(step, job)
+            result, step_log = self._run_step(step, job)
+            log_lines.append(step_log)
             step["status"] = "completed"
             step["conclusion"] = result
+            log_lines.append(f"##[endgroup]\n")
 
             if result != "success":
                 all_passed = False
@@ -147,6 +151,7 @@ class RunnerClient:
             self._report_progress(job_id, steps)
 
         conclusion = "success" if all_passed else "failure"
+        self._upload_logs(job_id, "".join(log_lines))
         self._complete_job(job_id, conclusion, steps)
         log.info("=== Job #%d finished: %s ===", job_id, conclusion)
 
@@ -156,22 +161,48 @@ class RunnerClient:
         except Exception:
             pass
 
-    def _run_step(self, step: dict, job: dict) -> str:
-        """Execute a single step. Returns 'success' or 'failure'."""
+    def _run_step(self, step: dict, job: dict) -> tuple[str, str]:
+        """Execute a single local shell step."""
         step_name = step.get("name", "")
+        command = step.get("run")
+        if not command:
+            return "success", f"Skipping non-shell step: {step_name}\n"
 
-        # We can only execute 'run' steps from the workflow YAML.
-        # The step data from the server is the pre-processed step info.
-        # For the custom runner, steps with 'run' commands will have been
-        # serialized into the step data. We look for common patterns.
-        # In the initial implementation, every step is treated as a shell command
-        # if it has run data, otherwise skipped.
+        env = os.environ.copy()
+        for key, value in (job.get("env") or {}).items():
+            env[str(key)] = str(value)
+        for key, value in (step.get("env") or {}).items():
+            env[str(key)] = str(value)
 
-        # The step structure from workflow_service stores minimal info.
-        # For now, log the step and return success (actual shell exec requires
-        # the original workflow YAML steps, which we'd need to forward).
-        log.info("    Executing: %s", step_name)
-        return "success"
+        cwd = WORKDIR
+        working_directory = step.get("working-directory")
+        if working_directory:
+            cwd = os.path.abspath(os.path.join(WORKDIR, working_directory))
+            workdir_root = os.path.abspath(WORKDIR)
+            if cwd != workdir_root and not cwd.startswith(workdir_root + os.sep):
+                return "failure", "working-directory escapes runner workdir\n"
+        os.makedirs(cwd, exist_ok=True)
+
+        log.info("    Executing shell command for step: %s", step_name)
+        try:
+            proc = subprocess.run(
+                command,
+                shell=True,
+                cwd=cwd,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=int(job.get("timeout_seconds") or 3600),
+            )
+        except subprocess.TimeoutExpired as exc:
+            output = exc.stdout or ""
+            return "failure", f"{output}\nCommand timed out\n"
+        except Exception as exc:
+            return "failure", f"Command failed to start: {exc}\n"
+
+        output = proc.stdout or ""
+        return ("success" if proc.returncode == 0 else "failure"), output
 
     def _report_progress(self, job_id: int, steps: list):
         try:
@@ -205,6 +236,16 @@ class RunnerClient:
 
     def run(self):
         """Main loop: register, then poll and execute jobs forever."""
+        if not ADMIN_TOKEN:
+            log.error(
+                "GITHUB_EMULATOR_TOKEN is required. Run the compose bootstrap "
+                "helper or set GITHUB_EMULATOR_RUNNER_TOKEN in .env."
+            )
+            return
+        if not REPO or "/" not in REPO:
+            log.error("RUNNER_REPO must be set as owner/repo, got %r", REPO)
+            return
+
         while True:
             try:
                 self.register()

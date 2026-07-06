@@ -339,12 +339,16 @@ async def create_workflow_run(
 
             steps_data = []
             for i, step in enumerate(job_config.get("steps", [])):
-                steps_data.append({
+                step_data = {
                     "number": i + 1,
                     "name": step.get("name", f"Step {i + 1}"),
                     "status": "queued",
                     "conclusion": None,
-                })
+                }
+                for key in ("run", "shell", "env", "working-directory", "uses", "with"):
+                    if key in step:
+                        step_data[key] = step[key]
+                steps_data.append(step_data)
 
             job = WorkflowJob(
                 run_id=run.id,

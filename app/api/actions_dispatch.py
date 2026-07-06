@@ -3,7 +3,9 @@
 import asyncio
 import hashlib
 import os
+import secrets
 from datetime import datetime, timezone
+from urllib.parse import parse_qs
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
@@ -16,6 +18,12 @@ from app.services.auth_service import hash_token
 from app.services.workflow_service import check_run_completion, dispatch_ready_jobs
 
 router = APIRouter(tags=["actions-dispatch"])
+
+
+def _is_expired(value: datetime) -> bool:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value < datetime.now(timezone.utc)
 
 
 async def _get_runner_from_token(request: Request, db) -> Runner:
@@ -34,14 +42,41 @@ async def _get_runner_from_token(request: Request, db) -> Runner:
     return runner
 
 
-@router.post("/actions/runner/register")
-async def register_runner(body: dict, db: DbSession):
-    """Register a new runner using a registration token."""
-    reg_token = body.get("token", "")
-    name = body.get("name", "unnamed-runner")
-    labels = body.get("labels", ["self-hosted", "linux"])
-    runner_os = body.get("os", "linux")
+async def _body_or_empty(request: Request) -> dict:
+    try:
+        body = await request.json()
+    except Exception:
+        raw = await request.body()
+        parsed = parse_qs(raw.decode()) if raw else {}
+        body = {key: values[-1] for key, values in parsed.items() if values}
+    return body if isinstance(body, dict) else {}
 
+
+def _registration_token_from_request(request: Request, body: dict) -> str:
+    token = (
+        body.get("token")
+        or body.get("registrationToken")
+        or request.query_params.get("token")
+        or request.query_params.get("registrationToken")
+        or request.headers.get("X-GitHub-Runner-Registration-Token")
+        or request.headers.get("X-Runner-Registration-Token")
+        or ""
+    )
+    auth = request.headers.get("Authorization", "")
+    if not token and auth.startswith("token "):
+        token = auth[6:]
+    if not token and auth.startswith("Bearer "):
+        token = auth[7:]
+    if not token and " " in auth:
+        token = auth.split(None, 1)[1]
+    return token
+
+
+async def _create_runner_from_registration(
+    reg_token: str,
+    body: dict,
+    db,
+) -> tuple[Runner, str]:
     result = await db.execute(
         select(RegistrationToken).where(RegistrationToken.token == reg_token)
     )
@@ -49,20 +84,27 @@ async def register_runner(body: dict, db: DbSession):
     if reg is None:
         raise HTTPException(status_code=401, detail="Invalid registration token")
 
-    if reg.expires_at < datetime.now(timezone.utc):
+    if _is_expired(reg.expires_at):
         raise HTTPException(status_code=401, detail="Registration token expired")
 
-    import secrets
-    runner_token = f"ghp_runner_{secrets.token_urlsafe(32)}"
-    token_hash = hash_token(runner_token)
+    labels = body.get("labels", ["self-hosted", "linux"])
+    if isinstance(labels, list):
+        labels = [
+            str(label.get("name", "")) if isinstance(label, dict) else str(label)
+            for label in labels
+        ]
+        labels = [label for label in labels if label]
+    else:
+        labels = ["self-hosted", "linux"]
 
+    runner_token = f"ghp_runner_{secrets.token_urlsafe(32)}"
     runner = Runner(
-        name=name,
-        os=runner_os,
+        name=body.get("name", body.get("agentName", "unnamed-runner")),
+        os=body.get("os", body.get("osDescription", "linux")),
         status="online",
         labels=labels,
         busy=False,
-        token_hash=token_hash,
+        token_hash=hash_token(runner_token),
         repo_id=reg.repo_id,
         last_heartbeat=datetime.now(timezone.utc),
     )
@@ -70,12 +112,64 @@ async def register_runner(body: dict, db: DbSession):
     await db.delete(reg)
     await db.commit()
     await db.refresh(runner)
+    return runner, runner_token
+
+
+def _registration_response(runner: Runner, runner_token: str, base: str | None = None) -> dict:
+    base = base or settings.BASE_URL
+    return {
+        "id": runner.id,
+        "agentId": runner.id,
+        "poolId": 1,
+        "poolName": "Default",
+        "name": runner.name,
+        "token": runner_token,
+        "tokenSchema": "OAuthAccessToken",
+        "token_schema": "OAuthAccessToken",
+        "serverUrl": base,
+        "gitServerUrl": base,
+        "tenantUrl": base,
+        "url": base,
+        "pipelines_url": f"{base}/_services/pipelines",
+        "actionsServiceUrl": f"{base}/_apis/distributedtask",
+        "authorization": {
+            "scheme": "OAuth",
+            "parameters": {"AccessToken": runner_token},
+        },
+        "runner": {
+            "id": runner.id,
+            "name": runner.name,
+            "os": runner.os,
+            "status": runner.status,
+            "labels": runner.labels or [],
+        },
+    }
+
+
+@router.post("/actions/runner/register")
+async def register_runner(body: dict, db: DbSession):
+    """Register a new runner using a registration token."""
+    reg_token = body.get("token", "")
+    runner, runner_token = await _create_runner_from_registration(reg_token, body, db)
 
     return {
         "runner_id": runner.id,
         "token": runner_token,
         "name": runner.name,
     }
+
+
+@router.post("/actions/runner-registration")
+async def register_runner_for_actions_service(request: Request, db: DbSession):
+    """Compatibility broker used by the upstream actions/runner config flow."""
+    body = await _body_or_empty(request)
+    reg_token = _registration_token_from_request(request, body)
+    if not reg_token:
+        raise HTTPException(status_code=401, detail="Registration token required")
+    runner, runner_token = await _create_runner_from_registration(reg_token, body, db)
+    request_base = f"{request.url.scheme}://{request.headers.get('host', request.url.netloc)}"
+    server_url = str(body.get("url") or request_base).rstrip("/")
+    return _registration_response(runner, runner_token, server_url)
 
 
 @router.post("/actions/runner/heartbeat")

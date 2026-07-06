@@ -25,6 +25,7 @@ from app.git.bare_repo import (
     write_file,
 )
 from app.models.comment import IssueComment
+from app.models.actions import Runner, Workflow, WorkflowJob, WorkflowRun
 from app.models.issue import Issue
 from app.models.organization import Organization
 from app.models.pull_request import PullRequest
@@ -89,6 +90,22 @@ def _ctx(request: Request, **extra) -> dict:
     # current_user is set by individual route handlers via extra kwargs
     context.setdefault("current_user", None)
     return context
+
+
+def _read_job_log(job_id: int) -> Optional[str]:
+    log_path = os.path.join(settings.DATA_DIR, "logs", "jobs", f"{job_id}.log")
+    if not os.path.isfile(log_path):
+        return None
+    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+        return f.read()
+
+
+def _can_view_repo(repo: Repository, current_user: Optional[User]) -> bool:
+    if not repo.private:
+        return True
+    if current_user is None:
+        return False
+    return current_user.id == repo.owner_id or current_user.site_admin
 
 
 # ---------------------------------------------------------------------------
@@ -336,6 +353,8 @@ async def repo_page(
     repo = await _get_repo(db, owner, repo_name)
     if repo is None:
         return HTMLResponse(content="<h1>404 - Not Found</h1>", status_code=404)
+    if not _can_view_repo(repo, current_user):
+        return HTMLResponse(content="<h1>404 - Not Found</h1>", status_code=404)
 
     tree_entries = None
     readme_content = None
@@ -423,6 +442,8 @@ async def new_issue_page(
     repo = await _get_repo(db, owner, repo_name)
     if repo is None:
         return HTMLResponse(content="<h1>404 - Not Found</h1>", status_code=404)
+    if not _can_view_repo(repo, current_user):
+        return HTMLResponse(content="<h1>404 - Not Found</h1>", status_code=404)
 
     return templates.TemplateResponse(
         request=request,
@@ -450,6 +471,8 @@ async def new_issue_submit(
     repo = await _get_repo(db, owner, repo_name)
     if repo is None:
         return HTMLResponse(content="<h1>404 - Not Found</h1>", status_code=404)
+    if not _can_view_repo(repo, current_user):
+        return HTMLResponse(content="<h1>404 - Not Found</h1>", status_code=404)
 
     issue = await issue_service.create_issue(
         db, repo=repo, user=current_user,
@@ -472,6 +495,8 @@ async def issues_list(
     current_user = await _get_current_user(request, db)
     repo = await _get_repo(db, owner, repo_name)
     if repo is None:
+        return HTMLResponse(content="<h1>404 - Not Found</h1>", status_code=404)
+    if not _can_view_repo(repo, current_user):
         return HTMLResponse(content="<h1>404 - Not Found</h1>", status_code=404)
 
     pr_issue_ids = select(PullRequest.issue_id)
@@ -688,6 +713,167 @@ async def pulls_list(
             open_count=open_count, closed_count=closed_count,
             open_pulls_count=open_count,
             current_user=current_user,
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Actions
+# ---------------------------------------------------------------------------
+
+@router.get("/{owner}/{repo_name}/actions", response_class=HTMLResponse)
+async def actions_list(
+    request: Request,
+    owner: str,
+    repo_name: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """List workflows and recent workflow runs for a repository."""
+    current_user = await _get_current_user(request, db)
+    repo = await _get_repo(db, owner, repo_name)
+    if repo is None:
+        return HTMLResponse(content="<h1>404 - Not Found</h1>", status_code=404)
+    if not _can_view_repo(repo, current_user):
+        return HTMLResponse(content="<h1>404 - Not Found</h1>", status_code=404)
+
+    workflows = list((await db.execute(
+        select(Workflow)
+        .where(Workflow.repo_id == repo.id)
+        .order_by(Workflow.path)
+    )).scalars().all())
+
+    runs = list((await db.execute(
+        select(WorkflowRun)
+        .where(WorkflowRun.repo_id == repo.id)
+        .order_by(WorkflowRun.created_at.desc())
+        .limit(50)
+    )).scalars().all())
+
+    runners_count = (await db.execute(
+        select(func.count(Runner.id)).where(Runner.repo_id == repo.id)
+    )).scalar() or 0
+
+    return templates.TemplateResponse(
+        request=request,
+        name="actions.html",
+        context=_ctx(
+            request, owner=owner, repo=repo, repo_name=repo.name,
+            workflows=workflows, runs=runs, runners_count=runners_count,
+            current_user=current_user,
+        ),
+    )
+
+
+@router.get("/{owner}/{repo_name}/actions/runs/{run_id:int}", response_class=HTMLResponse)
+async def action_run_detail(
+    request: Request,
+    owner: str,
+    repo_name: str,
+    run_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Workflow run detail with jobs."""
+    current_user = await _get_current_user(request, db)
+    repo = await _get_repo(db, owner, repo_name)
+    if repo is None:
+        return HTMLResponse(content="<h1>404 - Not Found</h1>", status_code=404)
+    if not _can_view_repo(repo, current_user):
+        return HTMLResponse(content="<h1>404 - Not Found</h1>", status_code=404)
+
+    result = await db.execute(
+        select(WorkflowRun).where(
+            WorkflowRun.id == run_id,
+            WorkflowRun.repo_id == repo.id,
+        )
+    )
+    run = result.scalar_one_or_none()
+    if run is None:
+        return HTMLResponse(content="<h1>404 - Run Not Found</h1>", status_code=404)
+
+    jobs = list((await db.execute(
+        select(WorkflowJob)
+        .where(WorkflowJob.run_id == run.id)
+        .order_by(WorkflowJob.created_at)
+    )).scalars().all())
+
+    return templates.TemplateResponse(
+        request=request,
+        name="action_run_detail.html",
+        context=_ctx(
+            request, owner=owner, repo=repo, repo_name=repo.name,
+            run=run, jobs=jobs, current_user=current_user,
+        ),
+    )
+
+
+@router.get("/{owner}/{repo_name}/actions/jobs/{job_id:int}", response_class=HTMLResponse)
+async def action_job_detail(
+    request: Request,
+    owner: str,
+    repo_name: str,
+    job_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Workflow job detail with step state and logs."""
+    current_user = await _get_current_user(request, db)
+    repo = await _get_repo(db, owner, repo_name)
+    if repo is None:
+        return HTMLResponse(content="<h1>404 - Not Found</h1>", status_code=404)
+    if not _can_view_repo(repo, current_user):
+        return HTMLResponse(content="<h1>404 - Not Found</h1>", status_code=404)
+
+    result = await db.execute(
+        select(WorkflowJob)
+        .join(WorkflowRun, WorkflowJob.run_id == WorkflowRun.id)
+        .where(
+            WorkflowJob.id == job_id,
+            WorkflowRun.repo_id == repo.id,
+        )
+    )
+    job = result.scalar_one_or_none()
+    if job is None:
+        return HTMLResponse(content="<h1>404 - Job Not Found</h1>", status_code=404)
+
+    run = job.run
+    logs = _read_job_log(job.id)
+
+    return templates.TemplateResponse(
+        request=request,
+        name="action_job_detail.html",
+        context=_ctx(
+            request, owner=owner, repo=repo, repo_name=repo.name,
+            run=run, job=job, logs=logs, current_user=current_user,
+        ),
+    )
+
+
+@router.get("/{owner}/{repo_name}/actions/runners", response_class=HTMLResponse)
+async def action_runners(
+    request: Request,
+    owner: str,
+    repo_name: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """List repository Actions runners."""
+    current_user = await _get_current_user(request, db)
+    repo = await _get_repo(db, owner, repo_name)
+    if repo is None:
+        return HTMLResponse(content="<h1>404 - Not Found</h1>", status_code=404)
+    if not _can_view_repo(repo, current_user):
+        return HTMLResponse(content="<h1>404 - Not Found</h1>", status_code=404)
+
+    runners = list((await db.execute(
+        select(Runner)
+        .where(Runner.repo_id == repo.id)
+        .order_by(Runner.name)
+    )).scalars().all())
+
+    return templates.TemplateResponse(
+        request=request,
+        name="action_runners.html",
+        context=_ctx(
+            request, owner=owner, repo=repo, repo_name=repo.name,
+            runners=runners, current_user=current_user,
         ),
     )
 
