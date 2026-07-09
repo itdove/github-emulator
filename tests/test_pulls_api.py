@@ -408,7 +408,19 @@ async def test_pr_web_merge_button_merges_pull_request(
     """The PR web page shows a merge button and can merge an open PR."""
     resp = await client.post(
         f"{API}/repos/testuser/pr-repo/pulls",
-        json={"title": "Merge from web", "head": "feature", "base": "main"},
+        json={
+            "title": "Merge from web",
+            "body": "Review the implementation before merging.",
+            "head": "feature",
+            "base": "main",
+        },
+        headers=auth_headers(test_token),
+    )
+    assert resp.status_code == 201
+
+    resp = await client.post(
+        f"{API}/repos/testuser/pr-repo/issues/1/comments",
+        json={"body": "Reviewer comment before merge controls."},
         headers=auth_headers(test_token),
     )
     assert resp.status_code == 201
@@ -422,6 +434,12 @@ async def test_pr_web_merge_button_merges_pull_request(
     page = await client.get("/ui/testuser/pr-repo/pulls/1")
     assert page.status_code == 200
     assert "Merge pull request" in page.text
+    assert page.text.index("Review the implementation before merging.") < page.text.index(
+        "Merge pull request"
+    )
+    assert page.text.index("Reviewer comment before merge controls.") < page.text.index(
+        "Merge pull request"
+    )
 
     resp = await client.post("/ui/testuser/pr-repo/pulls/1/merge")
     assert resp.status_code == 302

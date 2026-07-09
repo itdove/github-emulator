@@ -115,6 +115,43 @@
     </div>
     {% endif %}
 
+    {# ---- PR description ---- #}
+    {% if pr.body %}
+    <div class="Box color-shadow-small mb-4">
+        <div class="Box-header d-flex flex-items-center">
+            <strong>{{ pr.user_login or 'unknown' }}</strong>
+            {% if pr.created_at %}
+            <span class="color-fg-muted ml-1">opened this pull request on {{ pr.created_at.strftime('%b %d, %Y') }}</span>
+            {% endif %}
+        </div>
+        <div class="Box-body">
+            <div class="comment-body markdown-body">{{ pr.body_html|safe }}</div>
+        </div>
+    </div>
+    {% endif %}
+
+    {# ---- Comments ---- #}
+    {% for comment in comments %}
+    <div class="TimelineItem">
+        <div class="TimelineItem-avatar">
+            <span class="avatar-placeholder avatar-placeholder--medium">{{ (comment.user_login or 'U')[0] }}</span>
+        </div>
+        <div class="TimelineItem-body">
+            <div class="Box color-shadow-small">
+                <div class="Box-header d-flex flex-items-center">
+                    <strong>{{ comment.user_login or 'unknown' }}</strong>
+                    {% if comment.created_at %}
+                    <span class="color-fg-muted ml-1">commented on {{ comment.created_at.strftime('%b %d, %Y') }}</span>
+                    {% endif %}
+                </div>
+                <div class="Box-body">
+                    <div class="comment-body markdown-body">{{ comment.body_html|safe }}</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+
     <div class="Box mb-4">
         <div class="Box-row d-flex flex-items-center flex-justify-between flex-wrap" style="gap:12px;">
             <div>
@@ -144,49 +181,5 @@
             {% endif %}
         </div>
     </div>
-
-    {# ---- PR body ---- #}
-    {% if pr.body %}
-    <div class="TimelineItem">
-        <div class="TimelineItem-avatar">
-            <span class="avatar-placeholder avatar-placeholder--medium">{{ (pr.user_login or 'U')[0] }}</span>
-        </div>
-        <div class="TimelineItem-body">
-            <div class="Box color-shadow-small">
-                <div class="Box-header d-flex flex-items-center">
-                    <strong>{{ pr.user_login or 'unknown' }}</strong>
-                    {% if pr.created_at %}
-                    <span class="color-fg-muted ml-1">commented on {{ pr.created_at.strftime('%b %d, %Y') }}</span>
-                    {% endif %}
-                </div>
-                <div class="Box-body">
-                    <div class="comment-body markdown-body">{{ pr.body_html|safe }}</div>
-                </div>
-            </div>
-        </div>
-    </div>
-    {% endif %}
-
-    {# ---- Comments ---- #}
-    {% for comment in comments %}
-    <div class="TimelineItem">
-        <div class="TimelineItem-avatar">
-            <span class="avatar-placeholder avatar-placeholder--medium">{{ (comment.user_login or 'U')[0] }}</span>
-        </div>
-        <div class="TimelineItem-body">
-            <div class="Box color-shadow-small">
-                <div class="Box-header d-flex flex-items-center">
-                    <strong>{{ comment.user_login or 'unknown' }}</strong>
-                    {% if comment.created_at %}
-                    <span class="color-fg-muted ml-1">commented on {{ comment.created_at.strftime('%b %d, %Y') }}</span>
-                    {% endif %}
-                </div>
-                <div class="Box-body">
-                    <div class="comment-body markdown-body">{{ comment.body_html|safe }}</div>
-                </div>
-            </div>
-        </div>
-    </div>
-    {% endfor %}
 {% endif %}
 {% endblock %}
