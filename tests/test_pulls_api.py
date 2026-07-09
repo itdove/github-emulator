@@ -7,6 +7,8 @@ import pytest
 from sqlalchemy import select
 
 from app.git.bare_repo import write_file
+from app.models.issue import Issue
+from app.models.pull_request import PullRequest
 from app.models.repository import Repository
 from app.web.routes import _sign_session
 from tests.conftest import auth_headers
@@ -326,6 +328,59 @@ async def test_pr_list_files_returns_real_diff(client, db_session, test_user, te
     assert data[0]["additions"] == 1
     assert data[0]["deletions"] == 0
     assert "+hello from a pull request" in data[0]["patch"]
+
+
+@pytest.mark.asyncio
+async def test_pr_owner_prefixed_head_ref_resolves_commits_and_diff(
+    client, db_session, test_user, test_token
+):
+    """Existing owner:branch PR refs resolve to real branch commits and files."""
+    repo_name = await _create_real_pr_with_diff(
+        client, db_session, test_token, repo_name="pr-owner-prefix-repo"
+    )
+
+    result = await db_session.execute(
+        select(Repository).where(Repository.full_name == f"testuser/{repo_name}")
+    )
+    repo = result.scalar_one()
+    result = await db_session.execute(
+        select(Issue).where(Issue.repo_id == repo.id, Issue.number == 1)
+    )
+    issue = result.scalar_one()
+    result = await db_session.execute(
+        select(PullRequest).where(PullRequest.issue_id == issue.id)
+    )
+    pr = result.scalar_one()
+    real_head_sha = pr.head_sha
+    pr.head_ref = "testuser:feature"
+    pr.head_sha = "0" * 40
+    await db_session.commit()
+
+    pr_resp = await client.get(f"{API}/repos/testuser/{repo_name}/pulls/1")
+    assert pr_resp.status_code == 200
+    pr_data = pr_resp.json()
+    assert pr_data["head"]["ref"] == "feature"
+    assert pr_data["head"]["label"] == "testuser:feature"
+    assert pr_data["head"]["sha"] == real_head_sha
+
+    commits_resp = await client.get(
+        f"{API}/repos/testuser/{repo_name}/pulls/1/commits"
+    )
+    assert commits_resp.status_code == 200
+    commits = commits_resp.json()
+    assert [commit["sha"] for commit in commits] == [real_head_sha]
+    assert commits[0]["commit"]["message"] == "Add feature file"
+
+    files_resp = await client.get(f"{API}/repos/testuser/{repo_name}/pulls/1/files")
+    assert files_resp.status_code == 200
+    files = files_resp.json()
+    assert len(files) == 1
+    assert files[0]["filename"] == "feature.txt"
+
+    page = await client.get(f"/ui/testuser/{repo_name}/pulls/1")
+    assert page.status_code == 200
+    assert "testuser:testuser:feature" not in page.text
+    assert "testuser:feature" in page.text
 
 
 @pytest.mark.asyncio

@@ -22,6 +22,7 @@ from app.git.bare_repo import (
     get_default_branch,
     get_file_content,
     get_log,
+    normalize_branch_ref,
     get_tags,
     list_tree,
     write_file,
@@ -930,6 +931,12 @@ async def pull_detail(
     pr.state = issue.state
     pr.user_login = issue.user.login if issue.user else "unknown"
     pr.created_at = issue.created_at
+    pr.resolved_head_ref = pr.head_ref
+    pr.resolved_base_ref = pr.base_ref
+    pr.resolved_head_sha = pr.head_sha
+    pr.resolved_base_sha = pr.base_sha
+    pr.head_label = f"{owner}:{pr.head_ref}"
+    pr.base_label = f"{owner}:{pr.base_ref}"
 
     active_pr_tab = (
         tab if tab in {"conversation", "commits", "files"} else "conversation"
@@ -937,9 +944,23 @@ async def pull_detail(
     diff_files = []
     commits = []
     if repo.disk_path and os.path.isdir(repo.disk_path):
-        diff_files = await get_compare_diff(repo.disk_path, pr.base_ref, pr.head_ref)
+        pr.resolved_head_ref, resolved_head_sha = await normalize_branch_ref(
+            repo.disk_path, pr.head_ref, owner
+        )
+        pr.resolved_base_ref, resolved_base_sha = await normalize_branch_ref(
+            repo.disk_path, pr.base_ref, owner
+        )
+        pr.resolved_head_sha = resolved_head_sha or pr.head_sha
+        pr.resolved_base_sha = resolved_base_sha or pr.base_sha
+        pr.head_label = f"{owner}:{pr.resolved_head_ref}"
+        pr.base_label = f"{owner}:{pr.resolved_base_ref}"
+        diff_files = await get_compare_diff(
+            repo.disk_path, pr.resolved_base_ref, pr.resolved_head_ref
+        )
         if active_pr_tab == "commits":
-            commits = await get_log(repo.disk_path, ref=f"{pr.base_ref}..{pr.head_ref}")
+            commits = await get_log(
+                repo.disk_path, ref=f"{pr.resolved_base_ref}..{pr.resolved_head_ref}"
+            )
 
     # Get comments on the issue
     result = await db.execute(
@@ -994,6 +1015,15 @@ async def merge_pull_web(
 
     pr = issue.pull_request
     pr_url = f"/ui/{owner}/{repo_name}/pulls/{number}"
+    head_ref = pr.head_ref
+    base_ref = pr.base_ref
+    head_sha = pr.head_sha
+    if repo.disk_path and os.path.isdir(repo.disk_path):
+        head_ref, resolved_head_sha = await normalize_branch_ref(
+            repo.disk_path, pr.head_ref, owner
+        )
+        base_ref, _ = await normalize_branch_ref(repo.disk_path, pr.base_ref, owner)
+        head_sha = resolved_head_sha or head_sha
     if pr.merged:
         return RedirectResponse(url=pr_url, status_code=302)
     if issue.state == "closed":
@@ -1011,7 +1041,7 @@ async def merge_pull_web(
     pr.merged = True
     pr.merged_at = now
     pr.merged_by_id = current_user.id
-    pr.merge_commit_sha = pr.head_sha
+    pr.merge_commit_sha = head_sha
     issue.state = "closed"
     issue.state_reason = "completed"
     issue.closed_at = now
@@ -1023,10 +1053,10 @@ async def merge_pull_web(
 
         git_sha = await _perform_git_merge(
             disk_path=repo.disk_path,
-            head_ref=pr.head_ref,
-            base_ref=pr.base_ref,
+            head_ref=head_ref,
+            base_ref=base_ref,
             merge_method="merge",
-            commit_message=f"Merge pull request #{number}\n\nMerge {pr.head_ref} into {pr.base_ref}",
+            commit_message=f"Merge pull request #{number}\n\nMerge {head_ref} into {base_ref}",
         )
         if git_sha:
             pr.merge_commit_sha = git_sha

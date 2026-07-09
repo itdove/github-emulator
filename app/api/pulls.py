@@ -17,7 +17,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import AuthUser, CurrentUser, DbSession, get_repo_or_404
 from app.config import settings
-from app.git.bare_repo import get_compare_diff
+from app.git.bare_repo import get_compare_diff, get_log, normalize_branch_ref
 from app.models.issue import Issue
 from app.models.pull_request import PullRequest
 from app.models.repository import Repository
@@ -61,6 +61,15 @@ def _pr_json(pr: PullRequest, base_url: str) -> dict:
 
     head_repo = pr.head_repository or repo
     head_owner = head_repo.owner if head_repo else None
+    head_ref = getattr(pr, "resolved_head_ref", pr.head_ref)
+    base_ref = getattr(pr, "resolved_base_ref", pr.base_ref)
+    head_sha = getattr(pr, "resolved_head_sha", pr.head_sha)
+    base_sha = getattr(pr, "resolved_base_sha", pr.base_sha)
+    head_label = getattr(
+        pr,
+        "resolved_head_label",
+        f"{head_owner.login if head_owner else owner_login}:{head_ref}",
+    )
 
     return {
         "url": pr_url,
@@ -92,18 +101,18 @@ def _pr_json(pr: PullRequest, base_url: str) -> dict:
         "review_comments_url": f"{pr_url}/comments",
         "review_comment_url": f"{api}/repos/{repo_full}/pulls/comments{{/number}}",
         "comments_url": f"{issue_url}/comments",
-        "statuses_url": f"{api}/repos/{repo_full}/statuses/{pr.head_sha}",
+        "statuses_url": f"{api}/repos/{repo_full}/statuses/{head_sha}",
         "head": {
-            "label": f"{head_owner.login if head_owner else owner_login}:{pr.head_ref}",
-            "ref": pr.head_ref,
-            "sha": pr.head_sha,
+            "label": head_label,
+            "ref": head_ref,
+            "sha": head_sha,
             "user": SimpleUser.from_db(head_owner, base_url).model_dump() if head_owner else user_simple,
             "repo": None,  # Simplified
         },
         "base": {
-            "label": f"{owner_login}:{pr.base_ref}",
-            "ref": pr.base_ref,
-            "sha": pr.base_sha,
+            "label": f"{owner_login}:{base_ref}",
+            "ref": base_ref,
+            "sha": base_sha,
             "user": SimpleUser.from_db(repo.owner, base_url).model_dump() if repo and repo.owner else None,
             "repo": None,  # Simplified
         },
@@ -115,7 +124,7 @@ def _pr_json(pr: PullRequest, base_url: str) -> dict:
             "review_comments": {"href": f"{pr_url}/comments"},
             "review_comment": {"href": f"{api}/repos/{repo_full}/pulls/comments{{/number}}"},
             "commits": {"href": f"{pr_url}/commits"},
-            "statuses": {"href": f"{api}/repos/{repo_full}/statuses/{pr.head_sha}"},
+            "statuses": {"href": f"{api}/repos/{repo_full}/statuses/{head_sha}"},
         },
         "author_association": "OWNER",
         "merged": pr.merged,
@@ -128,6 +137,99 @@ def _pr_json(pr: PullRequest, base_url: str) -> dict:
         "additions": 0,
         "deletions": 0,
         "changed_files": 0,
+    }
+
+
+async def _attach_resolved_refs(pr: PullRequest, repository: Repository) -> None:
+    """Attach normalized refs and SHAs for response and git operations."""
+    owner_login = repository.owner.login if repository.owner else None
+    head_ref = pr.head_ref
+    head_sha = pr.head_sha
+    base_ref = pr.base_ref
+    base_sha = pr.base_sha
+
+    if repository.disk_path and os.path.isdir(repository.disk_path):
+        head_ref, resolved_head_sha = await normalize_branch_ref(
+            repository.disk_path, pr.head_ref, owner_login
+        )
+        base_ref, resolved_base_sha = await normalize_branch_ref(
+            repository.disk_path, pr.base_ref, owner_login
+        )
+        head_sha = resolved_head_sha or head_sha
+        base_sha = resolved_base_sha or base_sha
+
+    pr.resolved_head_ref = head_ref
+    pr.resolved_base_ref = base_ref
+    pr.resolved_head_sha = head_sha
+    pr.resolved_base_sha = base_sha
+    pr.resolved_head_label = f"{owner_login or 'unknown'}:{head_ref}"
+
+
+def _commit_json(owner: str, repo: str, commit: dict) -> dict:
+    """Build a GitHub-compatible commit JSON object from git log data."""
+    sha = commit["sha"]
+    api = f"{BASE}/api/v3"
+    return {
+        "sha": sha,
+        "node_id": _make_node_id("Commit", hash(sha) % 10**8),
+        "commit": {
+            "author": {
+                "name": commit.get("author_name"),
+                "email": commit.get("author_email"),
+                "date": commit.get("author_date"),
+            },
+            "committer": {
+                "name": commit.get("committer_name"),
+                "email": commit.get("committer_email"),
+                "date": commit.get("committer_date"),
+            },
+            "message": "\n\n".join(
+                part
+                for part in [commit.get("message", ""), commit.get("body", "")]
+                if part
+            ),
+            "tree": {"sha": commit.get("tree_sha"), "url": ""},
+            "url": f"{api}/repos/{owner}/{repo}/git/commits/{sha}",
+            "comment_count": 0,
+        },
+        "url": f"{api}/repos/{owner}/{repo}/commits/{sha}",
+        "html_url": f"{BASE}/{owner}/{repo}/commit/{sha}",
+        "parents": [
+            {
+                "sha": parent,
+                "url": f"{api}/repos/{owner}/{repo}/commits/{parent}",
+                "html_url": f"{BASE}/{owner}/{repo}/commit/{parent}",
+            }
+            for parent in commit.get("parent_shas", [])
+        ],
+    }
+
+
+def _placeholder_pr_commit_json(owner: str, repo: str, pr: PullRequest) -> dict:
+    """Build the legacy placeholder PR commit response for unresolved refs."""
+    sha = pr.resolved_head_sha
+    return {
+        "sha": sha,
+        "node_id": _make_node_id("Commit", hash(sha) % 10**8),
+        "commit": {
+            "author": {
+                "name": "unknown",
+                "email": "unknown",
+                "date": _fmt_dt(pr.issue.created_at),
+            },
+            "committer": {
+                "name": "unknown",
+                "email": "unknown",
+                "date": _fmt_dt(pr.issue.created_at),
+            },
+            "message": pr.issue.title,
+            "tree": {"sha": "0" * 40, "url": ""},
+            "url": "",
+            "comment_count": 0,
+        },
+        "url": f"{BASE}/api/v3/repos/{owner}/{repo}/commits/{sha}",
+        "html_url": f"{BASE}/{owner}/{repo}/commit/{sha}",
+        "parents": [],
     }
 
 
@@ -409,6 +511,9 @@ async def list_pulls(
     if parts:
         headers["Link"] = ", ".join(parts)
 
+    for pr in prs:
+        await _attach_resolved_refs(pr, repository)
+
     return JSONResponse(
         content=[_pr_json(pr, BASE) for pr in prs],
         headers=headers,
@@ -447,26 +552,20 @@ async def create_pull(
 
     head_sha = body.get("head_sha", "0" * 40)
     base_sha = body.get("base_sha", "0" * 40)
+    owner_login = repository.owner.login if repository.owner else owner
 
     # Try to resolve SHAs from the bare repo
     if repository.disk_path and os.path.isdir(repository.disk_path):
-        for ref, attr in [(head_ref, "head_sha"), (base_ref, "base_sha")]:
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    "git", "rev-parse", ref,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    env={**os.environ, "GIT_DIR": repository.disk_path},
-                )
-                stdout, _ = await proc.communicate()
-                if proc.returncode == 0:
-                    sha = stdout.decode().strip()
-                    if attr == "head_sha":
-                        head_sha = sha
-                    else:
-                        base_sha = sha
-            except Exception:
-                pass
+        normalized_head_ref, resolved_head_sha = await normalize_branch_ref(
+            repository.disk_path, head_ref, owner_login
+        )
+        normalized_base_ref, resolved_base_sha = await normalize_branch_ref(
+            repository.disk_path, base_ref, owner_login
+        )
+        head_ref = normalized_head_ref
+        base_ref = normalized_base_ref
+        head_sha = resolved_head_sha or head_sha
+        base_sha = resolved_base_sha or base_sha
 
     pr = PullRequest(
         issue_id=issue.id,
@@ -485,6 +584,7 @@ async def create_pull(
         _pr_query().where(PullRequest.id == pr.id)
     )
     pr = result.scalar_one()
+    await _attach_resolved_refs(pr, repository)
     return _pr_json(pr, BASE)
 
 
@@ -504,6 +604,7 @@ async def get_pull(
     if pr is None:
         raise HTTPException(status_code=404, detail="Not Found")
 
+    await _attach_resolved_refs(pr, repository)
     return _pr_json(pr, BASE)
 
 
@@ -554,6 +655,7 @@ async def update_pull(
         _pr_query().where(PullRequest.id == pr.id)
     )
     pr = result.scalar_one()
+    await _attach_resolved_refs(pr, repository)
     return _pr_json(pr, BASE)
 
 
@@ -577,6 +679,7 @@ async def merge_pull(
     pr = result.scalar_one_or_none()
     if pr is None:
         raise HTTPException(status_code=404, detail="Not Found")
+    await _attach_resolved_refs(pr, repository)
 
     if pr.merged:
         raise HTTPException(status_code=405, detail="Pull request already merged")
@@ -596,7 +699,7 @@ async def merge_pull(
     pr.merged = True
     pr.merged_at = now
     pr.merged_by_id = user.id
-    pr.merge_commit_sha = body.get("sha", pr.head_sha)
+    pr.merge_commit_sha = body.get("sha", pr.resolved_head_sha)
     issue.state = "closed"
     issue.closed_at = now
     repository.open_issues_count = max(0, repository.open_issues_count - 1)
@@ -605,8 +708,8 @@ async def merge_pull(
     try:
         git_sha = await _perform_git_merge(
             disk_path=repository.disk_path,
-            head_ref=pr.head_ref,
-            base_ref=pr.base_ref,
+            head_ref=pr.resolved_head_ref,
+            base_ref=pr.resolved_base_ref,
             merge_method=merge_method,
             commit_message=commit_message,
         )
@@ -644,7 +747,7 @@ async def list_pull_commits(
     db: DbSession,
     current_user: CurrentUser,
 ):
-    """List commits on a pull request (stub)."""
+    """List commits on a pull request."""
     repository = await get_repo_or_404(owner, repo, db)
 
     result = await db.execute(
@@ -655,25 +758,17 @@ async def list_pull_commits(
     pr = result.scalar_one_or_none()
     if pr is None:
         raise HTTPException(status_code=404, detail="Not Found")
+    await _attach_resolved_refs(pr, repository)
 
-    # Return a minimal commit list based on head_sha
-    return [
-        {
-            "sha": pr.head_sha,
-            "node_id": _make_node_id("Commit", hash(pr.head_sha) % 10**8),
-            "commit": {
-                "author": {"name": "unknown", "email": "unknown", "date": _fmt_dt(pr.issue.created_at)},
-                "committer": {"name": "unknown", "email": "unknown", "date": _fmt_dt(pr.issue.created_at)},
-                "message": pr.issue.title,
-                "tree": {"sha": "0" * 40, "url": ""},
-                "url": "",
-                "comment_count": 0,
-            },
-            "url": f"{BASE}/api/v3/repos/{owner}/{repo}/commits/{pr.head_sha}",
-            "html_url": f"{BASE}/{owner}/{repo}/commit/{pr.head_sha}",
-            "parents": [],
-        }
-    ]
+    if not repository.disk_path or not os.path.isdir(repository.disk_path):
+        return [_placeholder_pr_commit_json(owner, repo, pr)]
+
+    commits = await get_log(
+        repository.disk_path, ref=f"{pr.resolved_base_ref}..{pr.resolved_head_ref}"
+    )
+    if not commits:
+        return [_placeholder_pr_commit_json(owner, repo, pr)]
+    return [_commit_json(owner, repo, commit) for commit in commits]
 
 
 @router.get("/repos/{owner}/{repo}/pulls/{pull_number}/files")
@@ -695,9 +790,12 @@ async def list_pull_files(
     pr = result.scalar_one_or_none()
     if pr is None:
         raise HTTPException(status_code=404, detail="Not Found")
+    await _attach_resolved_refs(pr, repository)
 
     if not repository.disk_path or not os.path.isdir(repository.disk_path):
         return []
 
-    files = await get_compare_diff(repository.disk_path, pr.base_ref, pr.head_ref)
+    files = await get_compare_diff(
+        repository.disk_path, pr.resolved_base_ref, pr.resolved_head_ref
+    )
     return [_pull_file_json(owner, repo, file) for file in files]

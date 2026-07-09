@@ -524,6 +524,49 @@ async def get_commit_diff(disk_path: str, sha: str) -> list[dict]:
     return files
 
 
+async def resolve_ref(disk_path: str, ref: str) -> str | None:
+    """Resolve a git ref to a commit SHA."""
+    env = os.environ.copy()
+    env["GIT_DIR"] = disk_path
+
+    proc = await asyncio.create_subprocess_exec(
+        "git", "rev-parse", "--verify", ref,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+    )
+    stdout, _ = await proc.communicate()
+    if proc.returncode != 0:
+        return None
+    return stdout.decode().strip() or None
+
+
+async def normalize_branch_ref(
+    disk_path: str, ref: str, owner_login: str | None = None
+) -> tuple[str, str | None]:
+    """Return a git-usable branch ref and resolved SHA.
+
+    GitHub PR inputs and imported data may use label-style refs like
+    ``owner:branch``. For same-repository PRs, the bare repo only has
+    ``branch`` under refs/heads, so prefer the stripped branch when it exists.
+    """
+    if not ref:
+        return ref, None
+
+    candidates = [ref]
+    if ":" in ref:
+        maybe_owner, maybe_branch = ref.split(":", 1)
+        if maybe_branch and (owner_login is None or maybe_owner == owner_login):
+            candidates.insert(0, maybe_branch)
+
+    for candidate in candidates:
+        sha = await resolve_ref(disk_path, candidate)
+        if sha:
+            return candidate, sha
+
+    return ref, None
+
+
 async def get_compare_diff(disk_path: str, base_ref: str, head_ref: str) -> list[dict]:
     """Get files changed between two refs with their patches.
 
