@@ -1,10 +1,64 @@
 """Tests for the Pull Requests REST API endpoints."""
 
-import pytest
+import asyncio
+import os
 
+import pytest
+from sqlalchemy import select
+
+from app.git.bare_repo import write_file
+from app.models.repository import Repository
+from app.web.routes import _sign_session
 from tests.conftest import auth_headers
 
 API = "/api/v3"
+
+
+async def _create_real_pr_with_diff(
+    client, db_session, test_token, repo_name="pr-diff-repo"
+):
+    """Create a real git-backed PR with one added file."""
+    resp = await client.post(
+        f"{API}/user/repos",
+        json={"name": repo_name, "auto_init": True},
+        headers=auth_headers(test_token),
+    )
+    assert resp.status_code == 201
+
+    result = await db_session.execute(
+        select(Repository).where(Repository.full_name == f"testuser/{repo_name}")
+    )
+    repo = result.scalar_one()
+
+    proc = await asyncio.create_subprocess_exec(
+        "git",
+        "update-ref",
+        "refs/heads/feature",
+        "refs/heads/main",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env={**os.environ, "GIT_DIR": repo.disk_path},
+    )
+    _, stderr = await proc.communicate()
+    assert proc.returncode == 0, stderr.decode()
+
+    await write_file(
+        repo.disk_path,
+        "feature",
+        "feature.txt",
+        b"hello from a pull request\n",
+        "Add feature file",
+        "Test User",
+        "test@test.com",
+    )
+
+    resp = await client.post(
+        f"{API}/repos/testuser/{repo_name}/pulls",
+        json={"title": "Add feature file", "head": "feature", "base": "main"},
+        headers=auth_headers(test_token),
+    )
+    assert resp.status_code == 201
+    return repo_name
 
 
 @pytest.fixture
@@ -255,6 +309,134 @@ async def test_pr_list_files(client, test_user, test_token, repo_with_branch):
     resp = await client.get(f"{API}/repos/testuser/pr-repo/pulls/1/files")
     assert resp.status_code == 200
     assert isinstance(resp.json(), list)
+
+
+@pytest.mark.asyncio
+async def test_pr_list_files_returns_real_diff(client, db_session, test_user, test_token):
+    """GET /pulls/{number}/files returns changed files from PR base/head refs."""
+    repo_name = await _create_real_pr_with_diff(client, db_session, test_token)
+
+    resp = await client.get(f"{API}/repos/testuser/{repo_name}/pulls/1/files")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["filename"] == "feature.txt"
+    assert data[0]["status"] == "added"
+    assert data[0]["additions"] == 1
+    assert data[0]["deletions"] == 0
+    assert "+hello from a pull request" in data[0]["patch"]
+
+
+@pytest.mark.asyncio
+async def test_pr_web_files_tab_renders_diff(client, db_session, test_user, test_token):
+    """The PR web page exposes a Files changed tab with rendered patches."""
+    repo_name = await _create_real_pr_with_diff(
+        client, db_session, test_token, repo_name="pr-web-diff-repo"
+    )
+
+    conversation = await client.get(f"/ui/testuser/{repo_name}/pulls/1")
+    assert conversation.status_code == 200
+    assert "Conversation" in conversation.text
+    assert "Commits" in conversation.text
+    assert "Files changed" in conversation.text
+
+    files = await client.get(f"/ui/testuser/{repo_name}/pulls/1?tab=files")
+    assert files.status_code == 200
+    assert "Showing 1 changed file" in files.text
+    assert "feature.txt" in files.text
+    assert "+hello from a pull request" in files.text
+
+
+@pytest.mark.asyncio
+async def test_pr_web_renders_markdown_body_and_comments(
+    client, test_user, test_token, repo_with_branch
+):
+    """The PR conversation renders common Markdown constructs as HTML."""
+    body = "\n".join(
+        [
+            "## Pull request checklist",
+            "",
+            "This is **important** and uses `pytest`.",
+            "",
+            "| Check | Result |",
+            "| --- | --- |",
+            "| tests | pass |",
+            "",
+            "- [ ] Review the diff",
+            "- [x] Run tests",
+            "",
+            "<script>alert('xss')</script>",
+        ]
+    )
+    resp = await client.post(
+        f"{API}/repos/testuser/pr-repo/pulls",
+        json={"title": "Markdown PR", "body": body, "head": "feature", "base": "main"},
+        headers=auth_headers(test_token),
+    )
+    assert resp.status_code == 201
+
+    resp = await client.post(
+        f"{API}/repos/testuser/pr-repo/issues/1/comments",
+        json={"body": "### Comment\n\nA **bold** comment with `code`."},
+        headers=auth_headers(test_token),
+    )
+    assert resp.status_code == 201
+
+    page = await client.get("/ui/testuser/pr-repo/pulls/1")
+
+    assert page.status_code == 200
+    assert "<h2>Pull request checklist</h2>" in page.text
+    assert "<strong>important</strong>" in page.text
+    assert "<code>pytest</code>" in page.text
+    assert "<table>" in page.text
+    assert "<th>Check</th>" in page.text
+    assert "<td>pass</td>" in page.text
+    assert '<input type="checkbox" disabled>' in page.text
+    assert '<input type="checkbox" disabled checked>' in page.text
+    assert "<h3>Comment</h3>" in page.text
+    assert "<strong>bold</strong>" in page.text
+    assert "<code>code</code>" in page.text
+    assert "<script>alert" not in page.text
+    assert "&lt;script&gt;alert" in page.text
+
+
+@pytest.mark.asyncio
+async def test_pr_web_merge_button_merges_pull_request(
+    client, test_user, test_token, repo_with_branch
+):
+    """The PR web page shows a merge button and can merge an open PR."""
+    resp = await client.post(
+        f"{API}/repos/testuser/pr-repo/pulls",
+        json={"title": "Merge from web", "head": "feature", "base": "main"},
+        headers=auth_headers(test_token),
+    )
+    assert resp.status_code == 201
+
+    page = await client.get("/ui/testuser/pr-repo/pulls/1")
+    assert page.status_code == 200
+    assert "Merge pull request" not in page.text
+    assert "Sign in to merge" in page.text
+
+    client.cookies.set("ui_session", _sign_session("testuser"))
+    page = await client.get("/ui/testuser/pr-repo/pulls/1")
+    assert page.status_code == 200
+    assert "Merge pull request" in page.text
+
+    resp = await client.post("/ui/testuser/pr-repo/pulls/1/merge")
+    assert resp.status_code == 302
+    assert resp.headers["location"] == "/ui/testuser/pr-repo/pulls/1"
+
+    page = await client.get("/ui/testuser/pr-repo/pulls/1")
+    assert page.status_code == 200
+    assert "Pull request successfully merged" in page.text
+    assert "Merge pull request" not in page.text
+
+    pr = await client.get(f"{API}/repos/testuser/pr-repo/pulls/1")
+    pr_data = pr.json()
+    assert pr_data["state"] == "closed"
+    assert pr_data["merged"] is True
+    assert pr_data["merged_at"] is not None
 
 
 @pytest.mark.asyncio

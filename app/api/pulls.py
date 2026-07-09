@@ -17,6 +17,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import AuthUser, CurrentUser, DbSession, get_repo_or_404
 from app.config import settings
+from app.git.bare_repo import get_compare_diff
 from app.models.issue import Issue
 from app.models.pull_request import PullRequest
 from app.models.repository import Repository
@@ -127,6 +128,28 @@ def _pr_json(pr: PullRequest, base_url: str) -> dict:
         "additions": 0,
         "deletions": 0,
         "changed_files": 0,
+    }
+
+
+def _pull_file_json(owner: str, repo: str, file: dict) -> dict:
+    """Build a GitHub-compatible pull-request changed-file JSON object."""
+    filename = file.get("filename", "")
+    return {
+        "sha": file.get("sha", ""),
+        "filename": filename,
+        "status": file.get("status", "modified"),
+        "additions": file.get("additions", 0),
+        "deletions": file.get("deletions", 0),
+        "changes": file.get("changes", 0),
+        "blob_url": f"{BASE}/{owner}/{repo}/blob/HEAD/{filename}",
+        "raw_url": f"{BASE}/{owner}/{repo}/raw/HEAD/{filename}",
+        "contents_url": f"{BASE}/api/v3/repos/{owner}/{repo}/contents/{filename}",
+        "patch": file.get("patch", ""),
+        **(
+            {"previous_filename": file["previous_filename"]}
+            if file.get("previous_filename")
+            else {}
+        ),
     }
 
 
@@ -661,7 +684,7 @@ async def list_pull_files(
     db: DbSession,
     current_user: CurrentUser,
 ):
-    """List files changed by a pull request (stub)."""
+    """List files changed by a pull request."""
     repository = await get_repo_or_404(owner, repo, db)
 
     result = await db.execute(
@@ -673,4 +696,8 @@ async def list_pull_files(
     if pr is None:
         raise HTTPException(status_code=404, detail="Not Found")
 
-    return []
+    if not repository.disk_path or not os.path.isdir(repository.disk_path):
+        return []
+
+    files = await get_compare_diff(repository.disk_path, pr.base_ref, pr.head_ref)
+    return [_pull_file_json(owner, repo, file) for file in files]

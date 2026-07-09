@@ -37,47 +37,156 @@
 
 <hr class="mb-4">
 
-{# ---- PR body ---- #}
-{% if pr.body %}
-<div class="TimelineItem">
-    <div class="TimelineItem-avatar">
-        <span class="avatar-placeholder avatar-placeholder--medium">{{ (pr.user_login or 'U')[0] }}</span>
-    </div>
-    <div class="TimelineItem-body">
-        <div class="Box color-shadow-small">
-            <div class="Box-header d-flex flex-items-center">
-                <strong>{{ pr.user_login or 'unknown' }}</strong>
-                {% if pr.created_at %}
-                <span class="color-fg-muted ml-1">commented on {{ pr.created_at.strftime('%b %d, %Y') }}</span>
-                {% endif %}
-            </div>
-            <div class="Box-body">
-                <div class="comment-body">{{ pr.body }}</div>
-            </div>
-        </div>
-    </div>
+<div class="UnderlineNav mb-4">
+    <nav class="UnderlineNav-body">
+        <a class="UnderlineNav-item{% if active_pr_tab == 'conversation' %} selected{% endif %}"
+           href="{{ url_prefix }}/{{ owner }}/{{ repo.name }}/pulls/{{ pr.number }}">
+            Conversation
+        </a>
+        <a class="UnderlineNav-item{% if active_pr_tab == 'commits' %} selected{% endif %}"
+           href="{{ url_prefix }}/{{ owner }}/{{ repo.name }}/pulls/{{ pr.number }}?tab=commits">
+            Commits
+            {% if commits %}<span class="Counter">{{ commits|length }}</span>{% endif %}
+        </a>
+        <a class="UnderlineNav-item{% if active_pr_tab == 'files' %} selected{% endif %}"
+           href="{{ url_prefix }}/{{ owner }}/{{ repo.name }}/pulls/{{ pr.number }}?tab=files">
+            Files changed
+            {% if diff_files %}<span class="Counter">{{ diff_files|length }}</span>{% endif %}
+        </a>
+    </nav>
 </div>
-{% endif %}
 
-{# ---- Comments ---- #}
-{% for comment in comments %}
-<div class="TimelineItem">
-    <div class="TimelineItem-avatar">
-        <span class="avatar-placeholder avatar-placeholder--medium">{{ (comment.user_login or 'U')[0] }}</span>
+{% if active_pr_tab == 'files' %}
+    {% if diff_files %}
+    <div class="f6 color-fg-muted mb-2">
+        Showing {{ diff_files|length }} changed file{{ 's' if diff_files|length != 1 else '' }}
     </div>
-    <div class="TimelineItem-body">
-        <div class="Box color-shadow-small">
-            <div class="Box-header d-flex flex-items-center">
-                <strong>{{ comment.user_login or 'unknown' }}</strong>
-                {% if comment.created_at %}
-                <span class="color-fg-muted ml-1">commented on {{ comment.created_at.strftime('%b %d, %Y') }}</span>
+    {% for file in diff_files %}
+    <div class="Box mb-3">
+        <div class="Box-header d-flex flex-items-center flex-wrap" style="gap:8px;">
+            {% if file.status == "added" %}
+            <span class="Label Label--success">added</span>
+            {% elif file.status == "deleted" %}
+            <span class="Label Label--danger">deleted</span>
+            {% elif file.status == "renamed" %}
+            <span class="Label">renamed</span>
+            {% else %}
+            <span class="Label">modified</span>
+            {% endif %}
+            <span class="text-mono f6 text-bold">{{ file.filename }}</span>
+            <span class="color-fg-success f6">+{{ file.additions }}</span>
+            <span class="color-fg-danger f6">-{{ file.deletions }}</span>
+        </div>
+        <div class="Box-body p-0">
+            <pre class="f6 p-3" style="overflow-x:auto;margin:0;background:#f6f8fa;"><code>{{ file.patch }}</code></pre>
+        </div>
+    </div>
+    {% endfor %}
+    {% else %}
+    <div class="blankslate">
+        <p>No file changes in this pull request.</p>
+    </div>
+    {% endif %}
+{% elif active_pr_tab == 'commits' %}
+    {% if commits %}
+    <div class="Box">
+        {% for commit in commits %}
+        <div class="Box-row d-flex flex-items-center flex-justify-between">
+            <div class="min-width-0">
+                <div class="text-bold">{{ commit.message }}</div>
+                <div class="f6 color-fg-muted">
+                    {{ commit.author_name }} committed {{ commit.author_date }}
+                </div>
+            </div>
+            <a class="Link--secondary text-mono f6"
+               href="{{ url_prefix }}/{{ owner }}/{{ repo.name }}/commit/{{ commit.sha }}">{{ commit.sha[:7] }}</a>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="blankslate">
+        <p>No commits found for this pull request.</p>
+    </div>
+    {% endif %}
+{% else %}
+    {% if merge_error %}
+    <div class="flash flash-error mb-3">
+        {{ merge_error }}
+    </div>
+    {% endif %}
+
+    <div class="Box mb-4">
+        <div class="Box-row d-flex flex-items-center flex-justify-between flex-wrap" style="gap:12px;">
+            <div>
+                {% if pr.merged %}
+                <div class="text-bold">{{ git_merge(16) }} Pull request successfully merged</div>
+                {% elif pr.state != "open" %}
+                <div class="text-bold">{{ issue_closed(16) }} Pull request closed</div>
+                <div class="color-fg-muted f6">Closed pull requests cannot be merged.</div>
+                {% elif pr.mergeable is sameas false %}
+                <div class="text-bold">{{ issue_closed(16) }} Pull request cannot be merged</div>
+                <div class="color-fg-muted f6">Resolve conflicts before merging this pull request.</div>
+                {% else %}
+                <div class="text-bold">{{ git_pull_request(16) }} This branch has no conflicts with the base branch</div>
+                <div class="color-fg-muted f6">Merging will close this pull request.</div>
                 {% endif %}
             </div>
-            <div class="Box-body">
-                <div class="comment-body">{{ comment.body }}</div>
+            {% if pr.state == "open" and not pr.merged and pr.mergeable is not sameas false %}
+                {% if can_merge %}
+                <form method="post" action="{{ url_prefix }}/{{ owner }}/{{ repo.name }}/pulls/{{ pr.number }}/merge">
+                    <button type="submit" class="btn btn-primary">Merge pull request</button>
+                </form>
+                {% elif current_user %}
+                <span class="color-fg-muted f6">You do not have permission to merge.</span>
+                {% else %}
+                <a class="btn btn-primary" href="{{ url_prefix }}/login">Sign in to merge</a>
+                {% endif %}
+            {% endif %}
+        </div>
+    </div>
+
+    {# ---- PR body ---- #}
+    {% if pr.body %}
+    <div class="TimelineItem">
+        <div class="TimelineItem-avatar">
+            <span class="avatar-placeholder avatar-placeholder--medium">{{ (pr.user_login or 'U')[0] }}</span>
+        </div>
+        <div class="TimelineItem-body">
+            <div class="Box color-shadow-small">
+                <div class="Box-header d-flex flex-items-center">
+                    <strong>{{ pr.user_login or 'unknown' }}</strong>
+                    {% if pr.created_at %}
+                    <span class="color-fg-muted ml-1">commented on {{ pr.created_at.strftime('%b %d, %Y') }}</span>
+                    {% endif %}
+                </div>
+                <div class="Box-body">
+                    <div class="comment-body markdown-body">{{ pr.body_html|safe }}</div>
+                </div>
             </div>
         </div>
     </div>
-</div>
-{% endfor %}
+    {% endif %}
+
+    {# ---- Comments ---- #}
+    {% for comment in comments %}
+    <div class="TimelineItem">
+        <div class="TimelineItem-avatar">
+            <span class="avatar-placeholder avatar-placeholder--medium">{{ (comment.user_login or 'U')[0] }}</span>
+        </div>
+        <div class="TimelineItem-body">
+            <div class="Box color-shadow-small">
+                <div class="Box-header d-flex flex-items-center">
+                    <strong>{{ comment.user_login or 'unknown' }}</strong>
+                    {% if comment.created_at %}
+                    <span class="color-fg-muted ml-1">commented on {{ comment.created_at.strftime('%b %d, %Y') }}</span>
+                    {% endif %}
+                </div>
+                <div class="Box-body">
+                    <div class="comment-body markdown-body">{{ comment.body_html|safe }}</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+{% endif %}
 {% endblock %}

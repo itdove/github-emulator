@@ -524,6 +524,90 @@ async def get_commit_diff(disk_path: str, sha: str) -> list[dict]:
     return files
 
 
+async def get_compare_diff(disk_path: str, base_ref: str, head_ref: str) -> list[dict]:
+    """Get files changed between two refs with their patches.
+
+    Uses git diff base...head so pull requests compare from the merge base to
+    the proposed head branch. Falls back to base..head for unrelated histories.
+    """
+    env = os.environ.copy()
+    env["GIT_DIR"] = disk_path
+
+    async def run_diff(revision_range: str):
+        proc = await asyncio.create_subprocess_exec(
+            "git", "diff", "--find-renames", "--patch", revision_range,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        return await proc.communicate(), proc.returncode
+
+    (stdout, _), returncode = await run_diff(f"{base_ref}...{head_ref}")
+    if returncode != 0:
+        (stdout, _), returncode = await run_diff(f"{base_ref}..{head_ref}")
+    if returncode != 0:
+        return []
+
+    return _parse_git_diff(stdout.decode(errors="replace"))
+
+
+def _parse_git_diff(output: str) -> list[dict]:
+    """Parse git patch output into changed-file records."""
+    files = []
+    current_file = None
+    patch_lines = []
+
+    for line in output.split("\n"):
+        if line.startswith("diff --git "):
+            if current_file is not None:
+                current_file["patch"] = "\n".join(patch_lines)
+                current_file["changes"] = (
+                    current_file["additions"] + current_file["deletions"]
+                )
+                files.append(current_file)
+
+            parts = line.split(" b/", 1)
+            filename = parts[1] if len(parts) > 1 else ""
+            current_file = {
+                "filename": filename,
+                "status": "modified",
+                "additions": 0,
+                "deletions": 0,
+                "changes": 0,
+                "patch": "",
+            }
+            patch_lines = [line]
+            continue
+
+        if current_file is None:
+            continue
+
+        if line.startswith("new file"):
+            current_file["status"] = "added"
+        elif line.startswith("deleted file"):
+            current_file["status"] = "deleted"
+        elif line.startswith("rename from "):
+            current_file["status"] = "renamed"
+            current_file["previous_filename"] = line.removeprefix("rename from ")
+        elif line.startswith("rename to "):
+            current_file["filename"] = line.removeprefix("rename to ")
+        elif line.startswith("+++ b/"):
+            current_file["filename"] = line.removeprefix("+++ b/")
+        elif line.startswith("+") and not line.startswith("+++"):
+            current_file["additions"] += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            current_file["deletions"] += 1
+
+        patch_lines.append(line)
+
+    if current_file is not None:
+        current_file["patch"] = "\n".join(patch_lines)
+        current_file["changes"] = current_file["additions"] + current_file["deletions"]
+        files.append(current_file)
+
+    return files
+
+
 async def get_log(
     disk_path: str,
     ref: str = "HEAD",

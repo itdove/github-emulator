@@ -1,6 +1,7 @@
 """Public web frontend routes for browsing repos, issues, PRs, and code."""
 
 import os
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Form, Query, Request
@@ -15,6 +16,7 @@ from app.database import get_db
 from app.git.bare_repo import (
     get_branches,
     get_commit_count,
+    get_compare_diff,
     get_commit_diff,
     get_commit_info,
     get_default_branch,
@@ -33,6 +35,7 @@ from app.models.repository import Repository
 from app.models.user import User
 from app.services.auth_service import verify_password
 from app.services import issue_service, pr_service, repo_service
+from app.web.markdown import render_markdown
 
 _WEB_DIR = os.path.dirname(os.path.abspath(__file__))
 _TEMPLATES_DIR = os.path.join(_WEB_DIR, "templates")
@@ -106,6 +109,20 @@ def _can_view_repo(repo: Repository, current_user: Optional[User]) -> bool:
     if current_user is None:
         return False
     return current_user.id == repo.owner_id or current_user.site_admin
+
+
+def _can_merge_repo(repo: Repository, current_user: Optional[User]) -> bool:
+    """Return whether the current UI user can merge into this repository."""
+    if current_user is None:
+        return False
+    if current_user.site_admin or current_user.id == repo.owner_id:
+        return True
+    write_permissions = {"push", "maintain", "admin"}
+    return any(
+        collaborator.user_id == current_user.id
+        and collaborator.permission in write_permissions
+        for collaborator in repo.collaborators
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -887,6 +904,8 @@ async def pull_detail(
     owner: str,
     repo_name: str,
     number: int,
+    tab: str = Query("conversation"),
+    merge_error: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
     """Single pull request detail."""
@@ -907,9 +926,20 @@ async def pull_detail(
     pr.number = issue.number
     pr.title = issue.title
     pr.body = issue.body
+    pr.body_html = render_markdown(issue.body)
     pr.state = issue.state
     pr.user_login = issue.user.login if issue.user else "unknown"
     pr.created_at = issue.created_at
+
+    active_pr_tab = (
+        tab if tab in {"conversation", "commits", "files"} else "conversation"
+    )
+    diff_files = []
+    commits = []
+    if repo.disk_path and os.path.isdir(repo.disk_path):
+        diff_files = await get_compare_diff(repo.disk_path, pr.base_ref, pr.head_ref)
+        if active_pr_tab == "commits":
+            commits = await get_log(repo.disk_path, ref=f"{pr.base_ref}..{pr.head_ref}")
 
     # Get comments on the issue
     result = await db.execute(
@@ -920,16 +950,91 @@ async def pull_detail(
     comments = list(result.scalars().all())
     for c in comments:
         c.user_login = c.user.login if c.user else "unknown"
+        c.body_html = render_markdown(c.body)
 
     return templates.TemplateResponse(
         request=request,
         name="pull_detail.html",
         context=_ctx(
             request, owner=owner, repo=repo, repo_name=repo.name,
-            pr=pr, comments=comments,
+            pr=pr, comments=comments, active_pr_tab=active_pr_tab,
+            diff_files=diff_files, commits=commits,
+            can_merge=_can_merge_repo(repo, current_user),
+            merge_error=merge_error,
             current_user=current_user,
         ),
     )
+
+
+@router.post("/{owner}/{repo_name}/pulls/{number:int}/merge")
+async def merge_pull_web(
+    request: Request,
+    owner: str,
+    repo_name: str,
+    number: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Merge a pull request from the web UI."""
+    current_user = await _get_current_user(request, db)
+    if not current_user:
+        return RedirectResponse(url="/ui/login", status_code=302)
+
+    repo = await _get_repo(db, owner, repo_name)
+    if repo is None:
+        return HTMLResponse(content="<h1>404 - Not Found</h1>", status_code=404)
+    if not _can_merge_repo(repo, current_user):
+        return HTMLResponse(content="<h1>403 - Forbidden</h1>", status_code=403)
+
+    result = await db.execute(
+        select(Issue).where(Issue.repo_id == repo.id, Issue.number == number)
+    )
+    issue = result.scalar_one_or_none()
+    if issue is None or issue.pull_request is None:
+        return HTMLResponse(content="<h1>404 - PR Not Found</h1>", status_code=404)
+
+    pr = issue.pull_request
+    pr_url = f"/ui/{owner}/{repo_name}/pulls/{number}"
+    if pr.merged:
+        return RedirectResponse(url=pr_url, status_code=302)
+    if issue.state == "closed":
+        return RedirectResponse(
+            url=f"{pr_url}?merge_error=Pull%20request%20is%20closed",
+            status_code=302,
+        )
+    if pr.mergeable is False:
+        return RedirectResponse(
+            url=f"{pr_url}?merge_error=Pull%20request%20is%20not%20mergeable",
+            status_code=302,
+        )
+
+    now = datetime.now(timezone.utc)
+    pr.merged = True
+    pr.merged_at = now
+    pr.merged_by_id = current_user.id
+    pr.merge_commit_sha = pr.head_sha
+    issue.state = "closed"
+    issue.state_reason = "completed"
+    issue.closed_at = now
+    issue.closed_by_id = current_user.id
+    repo.open_issues_count = max(0, repo.open_issues_count - 1)
+
+    try:
+        from app.api.pulls import _perform_git_merge
+
+        git_sha = await _perform_git_merge(
+            disk_path=repo.disk_path,
+            head_ref=pr.head_ref,
+            base_ref=pr.base_ref,
+            merge_method="merge",
+            commit_message=f"Merge pull request #{number}\n\nMerge {pr.head_ref} into {pr.base_ref}",
+        )
+        if git_sha:
+            pr.merge_commit_sha = git_sha
+    except Exception:
+        pass
+
+    await db.commit()
+    return RedirectResponse(url=pr_url, status_code=302)
 
 
 # ---------------------------------------------------------------------------
