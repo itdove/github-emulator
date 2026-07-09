@@ -16,8 +16,10 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "change-me-in-production"
 
     # Admin credentials (created on first startup)
+    SEED_DATA: bool = True
     ADMIN_USERNAME: str = "admin"
     ADMIN_PASSWORD: str = "admin"
+    DEFAULT_ADMIN_TOKEN: str = "ghp_admin_default_token"
 
     # Hostname for Caddy TLS / gh CLI integration
     HOSTNAME: str = "ghemu.local"

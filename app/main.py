@@ -25,7 +25,8 @@ async def lifespan(app: FastAPI):
     os.makedirs(os.path.join(settings.DATA_DIR, "repos"), exist_ok=True)
 
     await init_db()
-    await _ensure_admin_user()
+    if settings.SEED_DATA:
+        await _ensure_admin_user()
 
     logger.info("GitHub Emulator started at %s", settings.BASE_URL)
 
@@ -50,35 +51,77 @@ async def lifespan(app: FastAPI):
 
 
 async def _ensure_admin_user():
-    """Create the default admin user and token if no users exist."""
+    """Ensure the seeded admin user has a default personal access token."""
     from app.models.user import User
     from app.models.token import PersonalAccessToken
     from sqlalchemy import select, func
 
-    from app.services.auth_service import hash_password
+    from app.services.auth_service import hash_password, hash_token
 
     async with async_session() as db:
-        count = (await db.execute(select(func.count(User.id)))).scalar() or 0
-        if count > 0:
-            return
-
-        hashed = hash_password(settings.ADMIN_PASSWORD)
-        admin = User(
-            login=settings.ADMIN_USERNAME,
-            hashed_password=hashed,
-            name="Admin",
-            email="admin@github-emulator.local",
-            site_admin=True,
+        result = await db.execute(
+            select(User).where(User.login == settings.ADMIN_USERNAME)
         )
-        db.add(admin)
+        admin = result.scalar_one_or_none()
+
+        if admin is None:
+            count = (await db.execute(select(func.count(User.id)))).scalar() or 0
+            if count > 0:
+                return
+
+            hashed = hash_password(settings.ADMIN_PASSWORD)
+            admin = User(
+                login=settings.ADMIN_USERNAME,
+                hashed_password=hashed,
+                name="Admin",
+                email="admin@github-emulator.local",
+                site_admin=True,
+            )
+            db.add(admin)
+            await db.commit()
+            await db.refresh(admin)
+
+            logger.info(
+                "Created admin user: %s (password: %s)",
+                settings.ADMIN_USERNAME,
+                settings.ADMIN_PASSWORD,
+            )
+
+        token_hash = hash_token(settings.DEFAULT_ADMIN_TOKEN)
+        result = await db.execute(
+            select(PersonalAccessToken).where(
+                PersonalAccessToken.token_hash == token_hash
+            )
+        )
+        pat = result.scalar_one_or_none()
+        default_scopes = [
+            "repo",
+            "user",
+            "admin",
+            "org",
+            "admin:org",
+            "workflow",
+            "admin:repo_hook",
+            "delete_repo",
+        ]
+
+        if pat is None:
+            pat = PersonalAccessToken(
+                user_id=admin.id,
+                name="default-admin-token",
+                token_hash=token_hash,
+                token_prefix=settings.DEFAULT_ADMIN_TOKEN[:8],
+                scopes=default_scopes,
+            )
+            db.add(pat)
+        else:
+            pat.user_id = admin.id
+            pat.name = "default-admin-token"
+            pat.token_prefix = settings.DEFAULT_ADMIN_TOKEN[:8]
+            pat.scopes = default_scopes
+
         await db.commit()
-        await db.refresh(admin)
-
-        logger.info(
-            "Created admin user: %s (password: %s)",
-            settings.ADMIN_USERNAME,
-            settings.ADMIN_PASSWORD,
-        )
+        logger.info("Seeded default admin PAT: %s", pat.token_prefix)
 
 
 def create_app() -> FastAPI:

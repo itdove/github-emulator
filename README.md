@@ -37,7 +37,9 @@ The server will be available at:
 | Admin Panel | `http://localhost:8000/admin/` |
 | GraphQL | `http://localhost:8000/api/graphql` |
 
-Default admin credentials: `admin` / `admin`.
+Default admin credentials: `admin` / `admin`. Fresh instances also seed a
+default admin personal access token, `ghp_admin_default_token`, so API clients
+can authenticate immediately.
 
 ### Vagrant (two-VM setup with TLS)
 
@@ -79,8 +81,10 @@ All settings are driven by environment variables with the `GITHUB_EMULATOR_` pre
 | `GITHUB_EMULATOR_DATA_DIR` | `./data` | Directory for bare git repos and the SQLite DB |
 | `GITHUB_EMULATOR_DATABASE_URL` | `sqlite+aiosqlite:///{DATA_DIR}/github_emulator.db` | SQLAlchemy database URL |
 | `GITHUB_EMULATOR_SECRET_KEY` | `change-me-in-production` | Secret for JWT/session signing |
+| `GITHUB_EMULATOR_SEED_DATA` | `true` | Seed default admin user and PAT at startup |
 | `GITHUB_EMULATOR_ADMIN_USERNAME` | `admin` | Admin user created on first startup |
 | `GITHUB_EMULATOR_ADMIN_PASSWORD` | `admin` | Admin user password |
+| `GITHUB_EMULATOR_DEFAULT_ADMIN_TOKEN` | `ghp_admin_default_token` | Default admin PAT seeded at startup |
 | `GITHUB_EMULATOR_HOSTNAME` | `ghemu.local` | Hostname for Caddy TLS certificate |
 | `GITHUB_EMULATOR_SSH_ENABLED` | `true` | Enable/disable the SSH transport |
 | `GITHUB_EMULATOR_SSH_PORT` | `2222` | SSH server listen port |
@@ -103,6 +107,18 @@ uv run alembic downgrade -1
 ## API Usage Examples
 
 ### Create a personal access token
+
+Fresh instances seed a default admin token:
+
+```bash
+curl -s http://localhost:8000/api/v3/user \
+  -H "Authorization: token ghp_admin_default_token" \
+  | python3 -m json.tool
+```
+
+Override it with `GITHUB_EMULATOR_DEFAULT_ADMIN_TOKEN` when starting the server.
+
+To create an additional token:
 
 ```bash
 curl -s -X POST http://localhost:8000/admin/tokens \

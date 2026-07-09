@@ -47,6 +47,15 @@ When you need detailed status, follow links from `PLAN.md` into:
 - Docker startup: `make up`
 - Smoke test running server: `make smoke`
 
+## Default Admin Access
+
+Fresh instances seed the admin user (`admin` / `admin`) and a default admin
+personal access token, `ghp_admin_default_token`. API clients can use either
+`Authorization: token ghp_admin_default_token` or
+`Authorization: Bearer ghp_admin_default_token` immediately after startup.
+Startup seeding is controlled by `GITHUB_EMULATOR_SEED_DATA`, which defaults to
+`true`. Override the seeded token with `GITHUB_EMULATOR_DEFAULT_ADMIN_TOKEN`.
+
 ## Editing Guidance
 
 - Prefer existing project patterns over new abstractions.
