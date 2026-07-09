@@ -322,12 +322,15 @@ async def profile_page(
     if profile is None:
         return HTMLResponse(content="<h1>404 - Not Found</h1>", status_code=404)
 
-    # Get repos
-    result = await db.execute(
-        select(Repository).where(
-            Repository.owner_id == profile.id
-        ).order_by(Repository.updated_at.desc())
-    )
+    if isinstance(profile, Organization):
+        repo_query = select(Repository).where(
+            Repository.owner_type == "Organization",
+            Repository.full_name.like(f"{profile.login}/%"),
+        )
+    else:
+        repo_query = select(Repository).where(Repository.owner_id == profile.id)
+
+    result = await db.execute(repo_query.order_by(Repository.updated_at.desc()))
     repos = list(result.scalars().all())
 
     return templates.TemplateResponse(
