@@ -31,7 +31,10 @@ async def db_engine(tmp_path):
     import app.models  # noqa: F401 - populate SQLAlchemy metadata before create_all
 
     db_url = f"sqlite+aiosqlite:///{tmp_path}/test.db"
-    engine = create_async_engine(db_url, connect_args={"check_same_thread": False})
+    engine = create_async_engine(
+        db_url,
+        connect_args={"check_same_thread": False, "timeout": 0.1},
+    )
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield engine

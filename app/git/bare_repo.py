@@ -478,14 +478,35 @@ async def get_commit_count(disk_path: str, ref: str) -> int:
 async def get_commit_diff(disk_path: str, sha: str) -> list[dict]:
     """Get files changed in a commit with their patches.
 
-    Uses git diff-tree -p --no-commit-id -r {sha}.
+    Diffs normal and merge commits against their first parent. Root commits are
+    diffed against the empty tree.
     Returns [{"filename", "status", "patch"}].
     """
     env = os.environ.copy()
     env["GIT_DIR"] = disk_path
 
     proc = await asyncio.create_subprocess_exec(
-        "git", "diff-tree", "-p", "--no-commit-id", "-r", sha,
+        "git", "rev-list", "--parents", "-n", "1", sha,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+    )
+    stdout, _ = await proc.communicate()
+    if proc.returncode != 0:
+        return []
+
+    rev_parts = stdout.decode().strip().split()
+    if not rev_parts:
+        return []
+
+    parents = rev_parts[1:]
+    if parents:
+        diff_args = ["diff", "-p", "--find-renames", parents[0], sha]
+    else:
+        diff_args = ["diff-tree", "-p", "--root", "--no-commit-id", "-r", sha]
+
+    proc = await asyncio.create_subprocess_exec(
+        "git", *diff_args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=env,

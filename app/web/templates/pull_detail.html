@@ -2,6 +2,8 @@
 {% from "_octicons.html" import git_pull_request, git_merge, issue_closed, comment_icon %}
 {% block title %}{{ pr.title }} #{{ pr.number }} - {{ owner }}/{{ repo.name }} - GitHub Emulator{% endblock %}
 
+{% block main_class %}{% if active_pr_tab == 'files' %}pr-files-main px-3 px-md-4 px-lg-5 mt-4{% else %}container-xl px-3 px-md-4 px-lg-5 mt-4{% endif %}{% endblock %}
+
 {% block subnav %}
 <div class="color-bg-default border-bottom">
     <div class="container-xl px-3 px-md-4 px-lg-5 pt-3">
@@ -58,30 +60,63 @@
 
 {% if active_pr_tab == 'files' %}
     {% if diff_files %}
-    <div class="f6 color-fg-muted mb-2">
-        Showing {{ diff_files|length }} changed file{{ 's' if diff_files|length != 1 else '' }}
-    </div>
-    {% for file in diff_files %}
-    <div class="Box mb-3">
-        <div class="Box-header d-flex flex-items-center flex-wrap" style="gap:8px;">
-            {% if file.status == "added" %}
-            <span class="Label Label--success">added</span>
-            {% elif file.status == "deleted" %}
-            <span class="Label Label--danger">deleted</span>
-            {% elif file.status == "renamed" %}
-            <span class="Label">renamed</span>
-            {% else %}
-            <span class="Label">modified</span>
-            {% endif %}
-            <span class="text-mono f6 text-bold">{{ file.filename }}</span>
-            <span class="color-fg-success f6">+{{ file.additions }}</span>
-            <span class="color-fg-danger f6">-{{ file.deletions }}</span>
+    <div class="pr-files-layout">
+        <aside class="pr-file-sidebar">
+            <div class="pr-file-sidebar-header d-flex flex-items-center flex-justify-between">
+                <span class="text-bold">Jump to file</span>
+                <span class="Counter">{{ diff_files|length }}</span>
+            </div>
+            <nav class="pr-file-menu" aria-label="Changed files">
+            {% for file in diff_files %}
+            <a class="pr-file-menu-item d-flex flex-items-center flex-justify-between px-3 py-2"
+               href="#file-{{ loop.index }}">
+                <span class="min-width-0">
+                    {% if file.status == "added" %}
+                    <span class="Label Label--success mr-2">added</span>
+                    {% elif file.status == "deleted" %}
+                    <span class="Label Label--danger mr-2">deleted</span>
+                    {% elif file.status == "renamed" %}
+                    <span class="Label mr-2">renamed</span>
+                    {% else %}
+                    <span class="Label mr-2">modified</span>
+                    {% endif %}
+                    <span class="text-mono f6">{{ file.filename }}</span>
+                </span>
+                <span class="f6 ml-3 flex-shrink-0">
+                    <span class="color-fg-success">+{{ file.additions }}</span>
+                    <span class="color-fg-danger ml-1">-{{ file.deletions }}</span>
+                </span>
+            </a>
+            {% endfor %}
+            </nav>
+        </aside>
+        <div class="pr-files-diff min-width-0">
+            <div class="f6 color-fg-muted mb-2">
+                Showing {{ diff_files|length }} changed file{{ 's' if diff_files|length != 1 else '' }}
+            </div>
+            {% for file in diff_files %}
+            <div class="Box mb-3" id="file-{{ loop.index }}">
+                <div class="Box-header d-flex flex-items-center flex-wrap" style="gap:8px;">
+                    {% if file.status == "added" %}
+                    <span class="Label Label--success">added</span>
+                    {% elif file.status == "deleted" %}
+                    <span class="Label Label--danger">deleted</span>
+                    {% elif file.status == "renamed" %}
+                    <span class="Label">renamed</span>
+                    {% else %}
+                    <span class="Label">modified</span>
+                    {% endif %}
+                    <span class="text-mono f6 text-bold">{{ file.filename }}</span>
+                    <span class="color-fg-success f6">+{{ file.additions }}</span>
+                    <span class="color-fg-danger f6">-{{ file.deletions }}</span>
+                </div>
+                <div class="Box-body p-0">
+                    <pre class="f6 p-3" style="overflow-x:auto;margin:0;background:#f6f8fa;"><code>{{ file.patch }}</code></pre>
+                </div>
+            </div>
+            {% endfor %}
         </div>
-        <div class="Box-body p-0">
-            <pre class="f6 p-3" style="overflow-x:auto;margin:0;background:#f6f8fa;"><code>{{ file.patch }}</code></pre>
-        </div>
     </div>
-    {% endfor %}
     {% else %}
     <div class="blankslate">
         <p>No file changes in this pull request.</p>

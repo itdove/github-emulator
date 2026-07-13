@@ -44,6 +44,10 @@ Actions visibility and runner evaluation.
 
 None tracked in the ledger.
 
+## Fixed Bugs
+
+- `docs/bugs/fixed/concurrent-repository-mutations-return-500-on-sqlite-lock.md`
+
 ## Decisions
 
 - `docs/decisions/ADR-0001-actions-runner-strategy.md`

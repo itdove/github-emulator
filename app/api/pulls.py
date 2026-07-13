@@ -270,6 +270,18 @@ async def _run_git(git_dir: str, *args: str, env_extra: dict | None = None) -> t
     return proc.returncode, stdout_bytes.decode(), stderr_bytes.decode()
 
 
+def _merge_env(work_tree: str | None = None) -> dict[str, str]:
+    env = {
+        "GIT_AUTHOR_NAME": "GitHub Emulator",
+        "GIT_AUTHOR_EMAIL": "noreply@github-emulator.local",
+        "GIT_COMMITTER_NAME": "GitHub Emulator",
+        "GIT_COMMITTER_EMAIL": "noreply@github-emulator.local",
+    }
+    if work_tree:
+        env["GIT_WORK_TREE"] = work_tree
+    return env
+
+
 async def _perform_git_merge(
     disk_path: str,
     head_ref: str,
@@ -321,7 +333,7 @@ async def _perform_git_merge(
         # Checkout the base branch
         rc, _, err = await _run_git(
             work_git_dir, "checkout", base_ref,
-            env_extra={"GIT_WORK_TREE": clone_path},
+            env_extra=_merge_env(clone_path),
         )
         if rc != 0:
             logger.warning("git checkout %s failed: %s", base_ref, err.strip())
@@ -333,7 +345,7 @@ async def _perform_git_merge(
             # git merge --squash <head_ref> && git commit
             rc, _, err = await _run_git(
                 work_git_dir, "merge", "--squash", f"origin/{head_ref}",
-                env_extra={"GIT_WORK_TREE": clone_path},
+                env_extra=_merge_env(clone_path),
             )
             if rc != 0:
                 logger.warning("git merge --squash failed: %s", err.strip())
@@ -342,7 +354,7 @@ async def _perform_git_merge(
             rc, _, err = await _run_git(
                 work_git_dir, "commit", "-m", commit_message,
                 "--author", "GitHub Emulator <noreply@github-emulator.local>",
-                env_extra={"GIT_WORK_TREE": clone_path},
+                env_extra=_merge_env(clone_path),
             )
             if rc != 0:
                 logger.warning("git commit (squash) failed: %s", err.strip())
@@ -358,7 +370,7 @@ async def _perform_git_merge(
             # pointer.
             rc, _, err = await _run_git(
                 work_git_dir, "checkout", f"origin/{head_ref}",
-                env_extra={"GIT_WORK_TREE": clone_path},
+                env_extra=_merge_env(clone_path),
             )
             if rc != 0:
                 logger.warning("git checkout origin/%s failed: %s", head_ref, err.strip())
@@ -366,14 +378,14 @@ async def _perform_git_merge(
 
             rc, _, err = await _run_git(
                 work_git_dir, "rebase", base_ref,
-                env_extra={"GIT_WORK_TREE": clone_path},
+                env_extra=_merge_env(clone_path),
             )
             if rc != 0:
                 logger.warning("git rebase failed: %s", err.strip())
                 # Abort the rebase so we don't leave the clone in a broken state
                 await _run_git(
                     work_git_dir, "rebase", "--abort",
-                    env_extra={"GIT_WORK_TREE": clone_path},
+                    env_extra=_merge_env(clone_path),
                 )
                 return None
 
@@ -385,7 +397,7 @@ async def _perform_git_merge(
 
             rc, _, err = await _run_git(
                 work_git_dir, "branch", "-f", base_ref, rebased_sha,
-                env_extra={"GIT_WORK_TREE": clone_path},
+                env_extra=_merge_env(clone_path),
             )
             if rc != 0:
                 logger.warning("git branch -f %s failed: %s", base_ref, err.strip())
@@ -393,7 +405,7 @@ async def _perform_git_merge(
 
             rc, _, err = await _run_git(
                 work_git_dir, "checkout", base_ref,
-                env_extra={"GIT_WORK_TREE": clone_path},
+                env_extra=_merge_env(clone_path),
             )
             if rc != 0:
                 logger.warning("git checkout %s after rebase failed: %s", base_ref, err.strip())
@@ -406,7 +418,7 @@ async def _perform_git_merge(
             rc, _, err = await _run_git(
                 work_git_dir, "merge", "--no-ff", f"origin/{head_ref}",
                 "-m", commit_message,
-                env_extra={"GIT_WORK_TREE": clone_path},
+                env_extra=_merge_env(clone_path),
             )
             if rc != 0:
                 logger.warning("git merge failed: %s", err.strip())
@@ -422,7 +434,7 @@ async def _perform_git_merge(
         # Push the updated base_ref back to the bare repo
         rc, _, err = await _run_git(
             work_git_dir, "push", "origin", base_ref,
-            env_extra={"GIT_WORK_TREE": clone_path},
+            env_extra=_merge_env(clone_path),
         )
         if rc != 0:
             logger.warning("git push to bare repo failed: %s", err.strip())

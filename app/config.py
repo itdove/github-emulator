@@ -11,6 +11,9 @@ class Settings(BaseSettings):
 
     # SQLite database URL
     DATABASE_URL: str = ""
+    SQLITE_BUSY_TIMEOUT_MS: int = 5000
+    SQLITE_WRITE_RETRY_ATTEMPTS: int = 2
+    SQLITE_WRITE_RETRY_DELAY_MS: int = 100
 
     # Secret key for JWT/session signing
     SECRET_KEY: str = "change-me-in-production"

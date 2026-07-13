@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.database_retry import rollback_after_sqlite_lock
 from app.models.user import User
 from app.models.token import PersonalAccessToken
 from app.models.repository import Repository
@@ -72,8 +73,15 @@ async def get_current_user(
     # Update last_used_at
     from datetime import datetime, timezone
 
+    user_id = pat.user_id
     pat.last_used_at = datetime.now(timezone.utc)
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception as exc:
+        if not await rollback_after_sqlite_lock(db, exc):
+            raise
+        result = await db.execute(select(User).where(User.id == user_id))
+        return result.scalar_one_or_none()
 
     return pat.user
 

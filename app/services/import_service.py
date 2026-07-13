@@ -15,6 +15,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.database import async_session
+from app.database_retry import commit_with_sqlite_retry
 from app.git.bare_repo import get_branches as get_disk_branches, get_default_branch, get_repo_size_kb
 from app.models.branch import Branch
 from app.models.import_job import ImportJob
@@ -42,18 +43,23 @@ async def start_single_import(
     """Create a single-repo import job and launch it in the background."""
     _, repo_name = parse_github_url(source_url)
 
+    source_url = source_url.strip()
     job = ImportJob(
         job_type="single",
         status="pending",
-        source_url=source_url.strip(),
+        source_url=source_url,
         repo_name=repo_name,
         owner_id=owner_id,
     )
     db.add(job)
-    await db.commit()
+    await commit_with_sqlite_retry(
+        db,
+        label="start_single_import",
+        before_retry=lambda: db.add(job),
+    )
     await db.refresh(job)
 
-    asyncio.create_task(_do_single_import(job.id, source_url.strip(), owner_id, github_token, owner_type, org_login))
+    asyncio.create_task(_do_single_import(job.id, source_url, owner_id, github_token, owner_type, org_login))
     return job
 
 

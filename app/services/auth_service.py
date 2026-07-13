@@ -10,6 +10,7 @@ from passlib.context import CryptContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database_retry import rollback_after_sqlite_lock
 from app.models import PersonalAccessToken, User
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -74,9 +75,16 @@ async def validate_token(db: AsyncSession, token: str) -> Optional[User]:
         return None
 
     # Update last_used_at
+    user_id = pat.user_id
     pat.last_used_at = datetime.utcnow()
-    await db.commit()
-    await db.refresh(pat)
+    try:
+        await db.commit()
+        await db.refresh(pat)
+    except Exception as exc:
+        if not await rollback_after_sqlite_lock(db, exc):
+            raise
+        result = await db.execute(select(User).where(User.id == user_id))
+        return result.scalar_one_or_none()
 
     return pat.user
 

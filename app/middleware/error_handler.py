@@ -19,10 +19,12 @@ class GitHubError(Exception):
         message: str = "An error occurred",
         status_code: int = 500,
         errors: Optional[list[dict[str, Any]]] = None,
+        headers: Optional[dict[str, str]] = None,
     ):
         self.message = message
         self.status_code = status_code
         self.errors = errors
+        self.headers = headers or {}
         super().__init__(self.message)
 
 
@@ -58,6 +60,18 @@ class ForbiddenError(GitHubError):
         super().__init__(message=message, status_code=403)
 
 
+class RetryableDatabaseError(GitHubError):
+    """503 response for transient database writer contention."""
+
+    def __init__(self, message: str = "Database is busy, retry the request"):
+        super().__init__(
+            message=message,
+            status_code=503,
+            errors=[{"resource": "Database", "code": "sqlite_locked"}],
+            headers={"Retry-After": "1"},
+        )
+
+
 # ── Exception handlers ───────────────────────────────────────────────
 
 
@@ -88,7 +102,10 @@ def _build_error_response(
 
 async def github_error_handler(request: Request, exc: GitHubError) -> JSONResponse:
     """Handle GitHubError exceptions."""
-    return _build_error_response(exc.status_code, exc.message, exc.errors)
+    resp = _build_error_response(exc.status_code, exc.message, exc.errors)
+    for key, value in exc.headers.items():
+        resp.headers[key] = value
+    return resp
 
 
 async def http_401_handler(request: Request, exc: Exception) -> JSONResponse:
@@ -116,8 +133,21 @@ async def http_422_handler(request: Request, exc: Exception) -> JSONResponse:
     return _build_error_response(422, "Validation Failed")
 
 
+async def http_503_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Handle 503 Service Unavailable."""
+    resp = _build_error_response(503, getattr(exc, "detail", "Service Unavailable"))
+    if hasattr(exc, "headers") and exc.headers:
+        for k, v in exc.headers.items():
+            resp.headers[k] = v
+    return resp
+
+
 async def generic_error_handler(request: Request, exc: Exception) -> JSONResponse:
     """Handle unexpected exceptions."""
+    from app.database_retry import is_sqlite_database_locked
+
+    if is_sqlite_database_locked(exc):
+        return await github_error_handler(request, RetryableDatabaseError())
     return _build_error_response(500, "Internal Server Error")
 
 
@@ -138,8 +168,13 @@ def register_error_handlers(app: FastAPI) -> None:
             403: http_403_handler,
             404: http_404_handler,
             422: http_422_handler,
+            503: http_503_handler,
         }
         handler = handlers.get(exc.status_code)
         if handler:
             return await handler(request, exc)
         return _build_error_response(exc.status_code, exc.detail)
+
+    from sqlalchemy.exc import OperationalError
+
+    app.add_exception_handler(OperationalError, generic_error_handler)

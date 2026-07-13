@@ -262,6 +262,67 @@ td.blob-code {
 .markdown-body .task-list-item input {
     margin-right: 6px;
 }
+.pr-files-main {
+    width: min(96vw, 1800px);
+    max-width: none;
+    margin-right: auto;
+    margin-left: auto;
+}
+.pr-files-layout {
+    display: grid;
+    grid-template-columns: minmax(220px, 20%) minmax(0, 1fr);
+    gap: 16px;
+    align-items: start;
+}
+.pr-file-sidebar {
+    position: sticky;
+    top: 16px;
+    max-height: calc(100vh - 32px);
+    overflow: auto;
+    border: 1px solid #d0d7de;
+    border-radius: 6px;
+    background-color: #ffffff;
+}
+.pr-file-sidebar-header {
+    padding: 8px 12px;
+    border-bottom: 1px solid #d0d7de;
+    background-color: #f6f8fa;
+}
+.pr-file-menu-item {
+    color: #1f2328;
+    text-decoration: none;
+    border-top: 1px solid #d8dee4;
+}
+.pr-file-menu-item:first-child {
+    border-top: 0;
+}
+.pr-file-menu-item:hover {
+    background-color: #f6f8fa;
+    text-decoration: none;
+}
+.pr-file-menu-item .text-mono {
+    display: inline-block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: bottom;
+    white-space: nowrap;
+}
+.pr-files-diff {
+    min-width: 0;
+}
+@media (max-width: 900px) {
+    .pr-files-main {
+        width: auto;
+    }
+    .pr-files-layout {
+        grid-template-columns: 1fr;
+    }
+    .pr-file-sidebar {
+        position: static;
+        max-height: 260px;
+    }
+}
 .empty-state {
     text-align: center;
     padding: 64px 16px;

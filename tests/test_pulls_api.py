@@ -63,6 +63,24 @@ async def _create_real_pr_with_diff(
     return repo_name
 
 
+async def _repo_ref_sha(db_session, full_name: str, ref: str) -> str:
+    result = await db_session.execute(
+        select(Repository).where(Repository.full_name == full_name)
+    )
+    repo = result.scalar_one()
+    proc = await asyncio.create_subprocess_exec(
+        "git",
+        "rev-parse",
+        ref,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env={**os.environ, "GIT_DIR": repo.disk_path},
+    )
+    stdout, stderr = await proc.communicate()
+    assert proc.returncode == 0, stderr.decode()
+    return stdout.decode().strip()
+
+
 @pytest.fixture
 async def repo_with_branch(client, test_user, test_token):
     """Create a repo for PR tests."""
@@ -398,8 +416,17 @@ async def test_pr_web_files_tab_renders_diff(client, db_session, test_user, test
 
     files = await client.get(f"/ui/testuser/{repo_name}/pulls/1?tab=files")
     assert files.status_code == 200
+    assert 'class="pr-files-main px-3 px-md-4 px-lg-5 mt-4"' in files.text
     assert "Showing 1 changed file" in files.text
+    assert 'class="pr-file-sidebar"' in files.text
+    assert 'aria-label="Changed files"' in files.text
+    assert "Jump to file" in files.text
+    assert 'href="#file-1"' in files.text
+    assert 'id="file-1"' in files.text
+    assert "added" in files.text
     assert "feature.txt" in files.text
+    assert "+1" in files.text
+    assert "-0" in files.text
     assert "+hello from a pull request" in files.text
 
 
@@ -458,58 +485,62 @@ async def test_pr_web_renders_markdown_body_and_comments(
 
 @pytest.mark.asyncio
 async def test_pr_web_merge_button_merges_pull_request(
-    client, test_user, test_token, repo_with_branch
+    client, db_session, test_user, test_token
 ):
     """The PR web page shows a merge button and can merge an open PR."""
-    resp = await client.post(
-        f"{API}/repos/testuser/pr-repo/pulls",
-        json={
-            "title": "Merge from web",
-            "body": "Review the implementation before merging.",
-            "head": "feature",
-            "base": "main",
-        },
-        headers=auth_headers(test_token),
+    repo_name = await _create_real_pr_with_diff(
+        client, db_session, test_token, repo_name="pr-web-merge-repo"
     )
-    assert resp.status_code == 201
+    main_before = await _repo_ref_sha(db_session, f"testuser/{repo_name}", "main")
+    feature_sha = await _repo_ref_sha(db_session, f"testuser/{repo_name}", "feature")
 
     resp = await client.post(
-        f"{API}/repos/testuser/pr-repo/issues/1/comments",
+        f"{API}/repos/testuser/{repo_name}/issues/1/comments",
         json={"body": "Reviewer comment before merge controls."},
         headers=auth_headers(test_token),
     )
     assert resp.status_code == 201
 
-    page = await client.get("/ui/testuser/pr-repo/pulls/1")
+    page = await client.get(f"/ui/testuser/{repo_name}/pulls/1")
     assert page.status_code == 200
     assert "Merge pull request" not in page.text
     assert "Sign in to merge" in page.text
 
     client.cookies.set("ui_session", _sign_session("testuser"))
-    page = await client.get("/ui/testuser/pr-repo/pulls/1")
+    page = await client.get(f"/ui/testuser/{repo_name}/pulls/1")
     assert page.status_code == 200
     assert "Merge pull request" in page.text
-    assert page.text.index("Review the implementation before merging.") < page.text.index(
-        "Merge pull request"
-    )
     assert page.text.index("Reviewer comment before merge controls.") < page.text.index(
         "Merge pull request"
     )
 
-    resp = await client.post("/ui/testuser/pr-repo/pulls/1/merge")
+    resp = await client.post(f"/ui/testuser/{repo_name}/pulls/1/merge")
     assert resp.status_code == 302
-    assert resp.headers["location"] == "/ui/testuser/pr-repo/pulls/1"
+    assert resp.headers["location"] == f"/ui/testuser/{repo_name}/pulls/1"
 
-    page = await client.get("/ui/testuser/pr-repo/pulls/1")
+    page = await client.get(f"/ui/testuser/{repo_name}/pulls/1")
     assert page.status_code == 200
     assert "Pull request successfully merged" in page.text
     assert "Merge pull request" not in page.text
 
-    pr = await client.get(f"{API}/repos/testuser/pr-repo/pulls/1")
+    pr = await client.get(f"{API}/repos/testuser/{repo_name}/pulls/1")
     pr_data = pr.json()
     assert pr_data["state"] == "closed"
     assert pr_data["merged"] is True
     assert pr_data["merged_at"] is not None
+    assert pr_data["merge_commit_sha"] not in {main_before, feature_sha}
+
+    main_after = await _repo_ref_sha(db_session, f"testuser/{repo_name}", "main")
+    assert main_after == pr_data["merge_commit_sha"]
+
+    commit_page = await client.get(
+        f"/ui/testuser/{repo_name}/commit/{pr_data['merge_commit_sha']}"
+    )
+    assert commit_page.status_code == 200
+    assert "Showing 1 changed file" in commit_page.text
+    assert "feature.txt" in commit_page.text
+    assert "+hello from a pull request" in commit_page.text
+    assert "No file changes in this commit." not in commit_page.text
 
 
 @pytest.mark.asyncio

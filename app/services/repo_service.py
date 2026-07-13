@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.database_retry import commit_with_sqlite_retry
 from app.models import Repository, User
 from app.services.git_service import (
     create_initial_commit,
@@ -165,7 +166,11 @@ async def delete_repo(db: AsyncSession, repo: Repository) -> None:
     """
     disk_path = repo.disk_path
     await db.delete(repo)
-    await db.commit()
+    await commit_with_sqlite_retry(
+        db,
+        label="delete_repo",
+        before_retry=lambda: db.delete(repo),
+    )
 
     # Remove bare repo from disk
     if disk_path:
