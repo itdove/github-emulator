@@ -2,6 +2,13 @@
 
 .DEFAULT_GOAL := help
 
+# Container engine: override with `make CONTAINER_ENGINE=podman <target>`
+CONTAINER_ENGINE ?= docker
+
+# Host port: override with `make PORT=8001 <target>`
+PORT ?= 8000
+SERVER_URL := http://localhost:$(PORT)
+
 # General
 
 ## Show this help
@@ -19,29 +26,29 @@ help:
 
 ## Build the container image
 build:
-	docker compose build
+	$(CONTAINER_ENGINE) compose build
 
 ## Start the container (build first if needed)
 up: build
-	docker compose down --volumes 2>/dev/null || true
-	docker compose up -d
+	$(CONTAINER_ENGINE) compose down --volumes 2>/dev/null || true
+	GITHUB_EMULATOR_HOST_PORT=$(PORT) $(CONTAINER_ENGINE) compose up -d
 	@echo "Waiting for server to start..."
 	@for i in 1 2 3 4 5 6 7 8 9 10; do \
-		curl -sf http://localhost:8000/api/v3 > /dev/null 2>&1 && break; \
+		curl -sf $(SERVER_URL)/api/v3 > /dev/null 2>&1 && break; \
 		sleep 1; \
 	done
-	@echo "Server is up at http://localhost:8000"
+	@echo "Server is up at $(SERVER_URL)"
 
 ## Stop and remove the container + volumes
 down:
-	docker compose down --volumes
+	$(CONTAINER_ENGINE) compose down --volumes
 
 ## Rebuild and restart from scratch
 restart: up
 
 ## Tail container logs
 logs:
-	docker compose logs -f
+	$(CONTAINER_ENGINE) compose logs -f
 
 ## Run the pytest suite (local, not in container)
 test:
@@ -50,31 +57,31 @@ test:
 ## Quick smoke test against the running container
 smoke:
 	@echo "=== Creating token ==="
-	$(eval TOKEN := $(shell curl -sf -X POST 'http://localhost:8000/admin/tokens' \
+	$(eval TOKEN := $(shell curl -sf -X POST '$(SERVER_URL)/admin/tokens' \
 		-H 'Content-Type: application/json' \
 		-d '{"login":"admin","name":"smoke-token","scopes":["repo","user"]}' \
 		| python3 -c "import sys,json; print(json.load(sys.stdin)['token'])"))
 	@echo "Token: $(TOKEN)"
 	@echo ""
 	@echo "=== GET /user ==="
-	@curl -sf -H "Authorization: token $(TOKEN)" http://localhost:8000/api/v3/user | python3 -m json.tool | head -5
+	@curl -sf -H "Authorization: token $(TOKEN)" $(SERVER_URL)/api/v3/user | python3 -m json.tool | head -5
 	@echo ""
 	@echo "=== Create repo ==="
 	@curl -sf -X POST -H "Authorization: token $(TOKEN)" -H "Content-Type: application/json" \
 		-d '{"name":"smoke-repo","description":"Smoke test"}' \
-		http://localhost:8000/api/v3/user/repos | python3 -m json.tool | head -5
+		$(SERVER_URL)/api/v3/user/repos | python3 -m json.tool | head -5
 	@echo ""
 	@echo "=== Create issue ==="
 	@curl -sf -X POST -H "Authorization: token $(TOKEN)" -H "Content-Type: application/json" \
 		-d '{"title":"Smoke test issue","body":"Testing"}' \
-		http://localhost:8000/api/v3/repos/admin/smoke-repo/issues | python3 -m json.tool | head -5
+		$(SERVER_URL)/api/v3/repos/admin/smoke-repo/issues | python3 -m json.tool | head -5
 	@echo ""
 	@echo "=== List issues ==="
-	@curl -sf http://localhost:8000/api/v3/repos/admin/smoke-repo/issues | python3 -m json.tool | head -5
+	@curl -sf $(SERVER_URL)/api/v3/repos/admin/smoke-repo/issues | python3 -m json.tool | head -5
 	@echo ""
 	@echo "=== Git clone + push ==="
 	@rm -rf /tmp/smoke-clone
-	@git clone http://localhost:8000/admin/smoke-repo.git /tmp/smoke-clone 2>&1 || true
+	@git clone $(SERVER_URL)/admin/smoke-repo.git /tmp/smoke-clone 2>&1 || true
 	@cd /tmp/smoke-clone && git checkout -b main 2>/dev/null; \
 		echo "# Smoke Test" > README.md; \
 		git add README.md; \
@@ -84,7 +91,7 @@ smoke:
 	@echo ""
 	@echo "=== Verify clone ==="
 	@rm -rf /tmp/smoke-verify
-	@git clone http://localhost:8000/admin/smoke-repo.git /tmp/smoke-verify 2>&1
+	@git clone $(SERVER_URL)/admin/smoke-repo.git /tmp/smoke-verify 2>&1
 	@cat /tmp/smoke-verify/README.md 2>/dev/null && echo "PASS: File content verified" || echo "FAIL: File not found"
 	@rm -rf /tmp/smoke-clone /tmp/smoke-verify
 	@echo ""
@@ -96,17 +103,17 @@ actions-runner-env:
 
 ## Start the opt-in real actions/runner compose profile
 actions-real-runner:
-	docker compose --profile real-runner up --build actions-real-runner
+	$(CONTAINER_ENGINE) compose --profile real-runner up --build actions-real-runner
 
 ## Run desktop Playwright smoke test against a running compose stack
 actions-ui-smoke:
 	python3 scripts/actions-ui-smoke-playwright.py \
-		--base-url "$${GITHUB_EMULATOR_UI_URL:-http://localhost:8000}" \
+		--base-url "$${GITHUB_EMULATOR_UI_URL:-$(SERVER_URL)}" \
 		--repo "$${RUNNER_REPO:-admin/test-repo}"
 
 ## Remove all build artifacts
 clean: down
-	docker rmi github_emulator_github-emulator 2>/dev/null || true
+	$(CONTAINER_ENGINE) rmi github_emulator_github-emulator 2>/dev/null || true
 	rm -rf .venv __pycache__ .pytest_cache
 
 # Vagrant VM (Debian 12 + Docker, via libvirt/KVM)
@@ -147,19 +154,19 @@ vm-sync:
 
 ## Build the container image inside the server VM
 vm-build:
-	vagrant ssh server -c "cd $(VM_PROJECT_DIR) && docker compose build"
+	vagrant ssh server -c "cd $(VM_PROJECT_DIR) && $(CONTAINER_ENGINE) compose build"
 
 ## Start containers inside the server VM (fresh DB)
 vm-start:
-	vagrant ssh server -c "cd $(VM_PROJECT_DIR) && docker compose down --volumes 2>/dev/null; docker compose up -d"
+	vagrant ssh server -c "cd $(VM_PROJECT_DIR) && $(CONTAINER_ENGINE) compose down --volumes 2>/dev/null; $(CONTAINER_ENGINE) compose up -d"
 
 ## Stop containers inside the server VM
 vm-stop:
-	vagrant ssh server -c "cd $(VM_PROJECT_DIR) && docker compose down"
+	vagrant ssh server -c "cd $(VM_PROJECT_DIR) && $(CONTAINER_ENGINE) compose down"
 
 ## Tail container logs inside the server VM
 vm-logs:
-	vagrant ssh server -c "cd $(VM_PROJECT_DIR) && docker compose logs -f"
+	vagrant ssh server -c "cd $(VM_PROJECT_DIR) && $(CONTAINER_ENGINE) compose logs -f"
 
 ## Sync, build, and start containers in server VM
 vm-deploy: vm-sync vm-build vm-start

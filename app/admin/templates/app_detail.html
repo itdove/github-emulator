@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+
+{% block title %}{{ app.name }} - GitHub Emulator Admin{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-items-center flex-justify-between mb-3">
+    <h2 class="f2">{{ app.name }}</h2>
+    <div>
+        <form method="post" action="/admin/apps/{{ app.id }}/delete" class="d-inline" onsubmit="return confirm('Delete app {{ app.name }}? This will also remove all installations.');">
+            <button type="submit" class="btn btn-danger">Delete App</button>
+        </form>
+    </div>
+</div>
+
+<div class="Box p-4 mb-4">
+    <h3 class="f3 mb-2">App Details</h3>
+    <table class="admin-table">
+        <tbody>
+            <tr><td class="text-bold" style="width:150px">App ID</td><td>{{ app.id }}</td></tr>
+            <tr><td class="text-bold">Slug</td><td><code>{{ app.slug }}</code></td></tr>
+            <tr><td class="text-bold">Owner</td><td>{{ app.owner }}</td></tr>
+            <tr><td class="text-bold">Client ID</td><td><code>{{ app.client_id }}</code></td></tr>
+            <tr><td class="text-bold">Created</td><td>{{ app.created_at.strftime('%Y-%m-%d %H:%M:%S') if app.created_at else "" }}</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<div class="Box p-4 mb-4">
+    <div class="d-flex flex-items-center flex-justify-between mb-2">
+        <h3 class="f3">Private Key</h3>
+        <form method="post" action="/admin/apps/{{ app.id }}/regenerate-key">
+            <button type="submit" class="btn btn-sm btn-outline" onclick="return confirm('Regenerate private key? The old key will be invalidated.');">Regenerate Key</button>
+        </form>
+    </div>
+    {% if app.private_key_pem %}
+    <div class="mb-2">
+        <button type="button" class="btn btn-sm btn-outline" onclick="navigator.clipboard.writeText(document.getElementById('detail-private-key').textContent).then(function(){this.textContent='Copied!'}.bind(this))">
+            <svg class="octicon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z"></path><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"></path></svg>
+            Copy
+        </button>
+    </div>
+    <div class="Box color-bg-subtle p-3" style="max-height: 200px; overflow-y: auto;">
+        <pre id="detail-private-key" class="f6" style="white-space: pre-wrap; word-break: break-all;">{{ app.private_key_pem }}</pre>
+    </div>
+    {% else %}
+    <p class="color-fg-muted">Private key not available.</p>
+    {% endif %}
+</div>
+
+<div class="Box p-4 mb-4">
+    <div class="d-flex flex-items-center flex-justify-between mb-2">
+        <h3 class="f3">Installations ({{ installations | length }})</h3>
+    </div>
+
+    {% if installations %}
+    <table class="admin-table">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Owner</th>
+                <th>Repository</th>
+                <th>Created</th>
+                <th class="actions">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for inst in installations %}
+            <tr>
+                <td>{{ inst.id }}</td>
+                <td>{{ inst.owner }}</td>
+                <td>{{ inst.repo or "(all repos)" }}</td>
+                <td>{{ inst.created_at.strftime('%Y-%m-%d %H:%M') if inst.created_at else "" }}</td>
+                <td class="actions">
+                    <form method="post" action="/admin/apps/{{ app.id }}/installations/{{ inst.id }}/delete" class="inline-delete" onsubmit="return confirm('Remove installation?');">
+                        <button type="submit" class="btn btn-sm btn-danger">Remove</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="color-fg-muted">No installations yet.</p>
+    {% endif %}
+
+    <h4 class="f4 mt-3 mb-2">Add Installation</h4>
+    <form method="post" action="/admin/apps/{{ app.id }}/installations/create" class="d-flex flex-items-end" style="gap: 8px;">
+        <div class="form-group mb-0">
+            <label for="inst_owner" class="f6">Owner (org/user)</label>
+            <input type="text" id="inst_owner" name="owner" class="form-control input-sm" placeholder="e.g. admin" required>
+        </div>
+        <div class="form-group mb-0">
+            <label for="inst_repo" class="f6">Repository (optional)</label>
+            <input type="text" id="inst_repo" name="repo" class="form-control input-sm" placeholder="leave empty for org-wide">
+        </div>
+        <button type="submit" class="btn btn-sm btn-primary">Install</button>
+    </form>
+</div>
+{% endblock %}

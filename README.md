@@ -11,7 +11,8 @@ scripts without touching real GitHub.
 - **Git Smart HTTP** -- clone, fetch, and push over HTTP/HTTPS against bare repositories
 - **Git SSH Transport** -- clone and push over SSH (port 2222 by default)
 - **Web UI** (`/ui/`) -- browse repositories, files, commits, issues, and pull requests in a GitHub-like interface
-- **Admin Panel** (`/admin/`) -- manage users, tokens, organisations, repositories, and import repos from real GitHub
+- **GitHub App Authentication** -- register apps, generate RSA keypairs, JWT-based auth, installation access tokens (`ghs_`), and commit verification badges
+- **Admin Panel** (`/admin/`) -- manage users, tokens, organisations, repositories, GitHub Apps, and import repos from real GitHub
 - **GitHub Import** -- clone a single repo by URL or bulk-import all repos from a GitHub user/org via the admin panel
 - **Webhooks** -- event delivery with recorded payloads
 - **`gh` CLI Compatible** -- works as a `GH_HOST` target for the GitHub CLI
@@ -20,12 +21,26 @@ scripts without touching real GitHub.
 
 ## Quick Start
 
-### Docker Compose (recommended)
+### Docker / Podman Compose (recommended)
 
 ```bash
 make up
 # or:
 docker compose up -d
+```
+
+To use Podman instead of Docker:
+
+```bash
+make CONTAINER_ENGINE=podman up
+```
+
+To use a different port (e.g. if 8000 is already in use):
+
+```bash
+make PORT=8001 up
+# or for local dev:
+uv run uvicorn app.main:app --reload --port 8001
 ```
 
 The server will be available at:
@@ -85,7 +100,10 @@ All settings are driven by environment variables with the `GITHUB_EMULATOR_` pre
 | `GITHUB_EMULATOR_ADMIN_USERNAME` | `admin` | Admin user created on first startup |
 | `GITHUB_EMULATOR_ADMIN_PASSWORD` | `admin` | Admin user password |
 | `GITHUB_EMULATOR_DEFAULT_ADMIN_TOKEN` | `ghp_admin_default_token` | Default admin PAT seeded at startup |
+| `GITHUB_EMULATOR_HOST` | `0.0.0.0` | Server bind address |
+| `GITHUB_EMULATOR_PORT` | `8000` | Server listen port |
 | `GITHUB_EMULATOR_HOSTNAME` | `ghemu.local` | Hostname for Caddy TLS certificate |
+| `GITHUB_EMULATOR_APP_JWT_PERMISSIVE` | `true` | Skip JWT signature verification for GitHub App auth (accept any well-formed JWT) |
 | `GITHUB_EMULATOR_SSH_ENABLED` | `true` | Enable/disable the SSH transport |
 | `GITHUB_EMULATOR_SSH_PORT` | `2222` | SSH server listen port |
 
@@ -184,6 +202,43 @@ gh issue create --repo admin/my-repo --title "Test" --body "Hello"
 > **Note:** If you prefer not to disable TLS verification globally, you can
 > extract Caddy's root CA certificate from the container and add it to your
 > system trust store instead. See the Caddy documentation for details.
+
+### GitHub App Authentication
+
+Register a GitHub App, install it, and use installation tokens for API calls:
+
+```bash
+# 1. Register a new GitHub App (returns private key PEM)
+curl -s -X POST http://localhost:8000/admin/api/apps \
+  -H "Content-Type: application/json" \
+  -d '{"name": "my-app", "owner": "admin"}' \
+  | python3 -m json.tool
+
+# 2. Install the app on an org
+curl -s -X POST http://localhost:8000/admin/api/apps/1/installations \
+  -H "Content-Type: application/json" \
+  -d '{"owner": "admin"}' \
+  | python3 -m json.tool
+
+# 3. Generate a JWT and exchange it for an installation token
+#    (use PyJWT or similar to sign with the private key from step 1)
+JWT="<your-jwt-here>"
+curl -s -X POST http://localhost:8000/api/v3/app/installations/1/access_tokens \
+  -H "Authorization: Bearer $JWT" \
+  | python3 -m json.tool
+
+# 4. Use the installation token for API calls
+INST_TOKEN="ghs_..."
+curl -s http://localhost:8000/api/v3/user \
+  -H "Authorization: token $INST_TOKEN" \
+  | python3 -m json.tool
+```
+
+Commits created with an installation token return `"verified": true` in the
+verification payload, matching real GitHub's behavior for App-signed commits.
+
+By default, JWT signature verification is skipped (permissive mode). Set
+`GITHUB_EMULATOR_APP_JWT_PERMISSIVE=false` for strict RS256 validation.
 
 ### View GitHub Actions jobs in the Web UI
 
@@ -292,7 +347,7 @@ app/
   database.py     # Async engine, session factory, Base
   main.py         # Application entrypoint
 alembic/          # Database migration scripts
-tests/            # Pytest test suite (219 tests)
+tests/            # Pytest test suite
 scripts/          # Integration test scripts for gh/git CLI
 Dockerfile
 docker-compose.yml

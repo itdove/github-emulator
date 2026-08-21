@@ -68,6 +68,16 @@ async def get_current_user(
     )
     pat = result.scalar_one_or_none()
     if pat is None:
+        if token_value.startswith("ghs_"):
+            from app.services.github_app_service import validate_installation_token
+            inst_token = await validate_installation_token(db, token_value)
+            if inst_token is not None:
+                request.state.is_installation_token = True
+                owner_name = inst_token.installation.app.owner
+                user_result = await db.execute(
+                    select(User).where(User.login == owner_name)
+                )
+                return user_result.scalar_one_or_none()
         return None
 
     # Update last_used_at

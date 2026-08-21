@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8000
 
+    # GitHub App JWT verification
+    APP_JWT_PERMISSIVE: bool = True
+
     # SSH transport
     SSH_ENABLED: bool = True
     SSH_PORT: int = 2222

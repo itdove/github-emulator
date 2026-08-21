@@ -23,6 +23,7 @@ from app.models.gist import Gist, GistFile
 from app.models.ssh_key import SSHKey, GPGKey
 from app.models.search_index import FileContent, CommitMetadata
 from app.models.import_job import ImportJob
+from app.models.github_app import GitHubApp, AppInstallation, InstallationToken
 
 __all__ = [
     "User",
@@ -51,4 +52,5 @@ __all__ = [
     "SSHKey", "GPGKey",
     "FileContent", "CommitMetadata",
     "ImportJob",
+    "GitHubApp", "AppInstallation", "InstallationToken",
 ]

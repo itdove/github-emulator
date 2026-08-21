@@ -27,10 +27,12 @@ from app.models.repository import Repository
 from app.models.token import PersonalAccessToken
 from app.models.user import User
 from app.models.import_job import ImportJob
+from app.models.github_app import GitHubApp, AppInstallation
 from app.services.auth_service import hash_password, verify_password
 from app.services.import_service import start_single_import, start_bulk_import
 from app.services.repo_service import delete_repo as delete_repository
 from app.services.user_service import create_token, create_user
+from app.services import github_app_service
 
 # ---------------------------------------------------------------------------
 # Templates & Router setup
@@ -750,6 +752,172 @@ async def delete_org(
         await db.commit()
 
     return RedirectResponse(url="/admin/orgs", status_code=302)
+
+
+# ---------------------------------------------------------------------------
+# Routes: GitHub Apps
+# ---------------------------------------------------------------------------
+
+@router.get("/apps", response_class=HTMLResponse)
+async def list_apps(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """List all GitHub Apps."""
+    admin_user = _get_admin_user(request)
+    if not admin_user:
+        return RedirectResponse(url="/admin/login", status_code=302)
+
+    apps = await github_app_service.list_apps(db)
+
+    return templates.TemplateResponse(
+        request=request,
+        name="apps.html",
+        context=_ctx(request, admin_user=admin_user, apps=apps),
+    )
+
+
+@router.get("/apps/create", response_class=HTMLResponse)
+async def create_app_form(request: Request):
+    """Render the register-app form."""
+    admin_user = _get_admin_user(request)
+    if not admin_user:
+        return RedirectResponse(url="/admin/login", status_code=302)
+
+    return templates.TemplateResponse(
+        request=request,
+        name="app_form.html",
+        context=_ctx(request, admin_user=admin_user, created_app=None, private_key=None),
+    )
+
+
+@router.post("/apps/create", response_class=HTMLResponse)
+async def create_app_handler(
+    request: Request,
+    name: str = Form(...),
+    owner: str = Form("admin"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Handle register-app form submission."""
+    admin_user = _get_admin_user(request)
+    if not admin_user:
+        return RedirectResponse(url="/admin/login", status_code=302)
+
+    app, private_key = await github_app_service.create_app(db, name, owner)
+
+    return templates.TemplateResponse(
+        request=request,
+        name="app_form.html",
+        context=_ctx(
+            request,
+            admin_user=admin_user,
+            created_app=app,
+            private_key=private_key,
+            flash_message="GitHub App registered successfully.",
+            flash_type="success",
+        ),
+    )
+
+
+@router.get("/apps/{app_id}", response_class=HTMLResponse)
+async def app_detail(
+    request: Request,
+    app_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """View GitHub App details and installations."""
+    admin_user = _get_admin_user(request)
+    if not admin_user:
+        return RedirectResponse(url="/admin/login", status_code=302)
+
+    app = await github_app_service.get_app(db, app_id)
+    if not app:
+        return RedirectResponse(url="/admin/apps", status_code=302)
+
+    installations = await github_app_service.list_installations(db, app_id)
+
+    return templates.TemplateResponse(
+        request=request,
+        name="app_detail.html",
+        context=_ctx(request, admin_user=admin_user, app=app, installations=installations),
+    )
+
+
+@router.post("/apps/{app_id}/delete", response_class=HTMLResponse)
+async def delete_app(
+    request: Request,
+    app_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a GitHub App."""
+    admin_user = _get_admin_user(request)
+    if not admin_user:
+        return RedirectResponse(url="/admin/login", status_code=302)
+
+    app = await github_app_service.get_app(db, app_id)
+    if app:
+        await db.delete(app)
+        await db.commit()
+
+    return RedirectResponse(url="/admin/apps", status_code=302)
+
+
+@router.post("/apps/{app_id}/regenerate-key", response_class=HTMLResponse)
+async def regenerate_app_key(
+    request: Request,
+    app_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Regenerate the RSA keypair for a GitHub App."""
+    admin_user = _get_admin_user(request)
+    if not admin_user:
+        return RedirectResponse(url="/admin/login", status_code=302)
+
+    result = await github_app_service.regenerate_private_key(db, app_id)
+    if not result:
+        return RedirectResponse(url="/admin/apps", status_code=302)
+
+    return RedirectResponse(url=f"/admin/apps/{app_id}", status_code=302)
+
+
+@router.post("/apps/{app_id}/installations/create", response_class=HTMLResponse)
+async def create_app_installation(
+    request: Request,
+    app_id: int,
+    owner: str = Form(...),
+    repo: str = Form(""),
+    db: AsyncSession = Depends(get_db),
+):
+    """Install app on an org or repo."""
+    admin_user = _get_admin_user(request)
+    if not admin_user:
+        return RedirectResponse(url="/admin/login", status_code=302)
+
+    await github_app_service.create_installation(
+        db, app_id, owner, repo or None
+    )
+
+    return RedirectResponse(url=f"/admin/apps/{app_id}", status_code=302)
+
+
+@router.post("/apps/{app_id}/installations/{installation_id}/delete", response_class=HTMLResponse)
+async def delete_app_installation(
+    request: Request,
+    app_id: int,
+    installation_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Remove an installation."""
+    admin_user = _get_admin_user(request)
+    if not admin_user:
+        return RedirectResponse(url="/admin/login", status_code=302)
+
+    installation = await github_app_service.get_installation(db, installation_id)
+    if installation:
+        await db.delete(installation)
+        await db.commit()
+
+    return RedirectResponse(url=f"/admin/apps/{app_id}", status_code=302)
 
 
 # ---------------------------------------------------------------------------

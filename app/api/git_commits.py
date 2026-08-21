@@ -3,7 +3,7 @@
 import asyncio
 import os
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from app.api.deps import AuthUser, CurrentUser, DbSession, get_repo_or_404
 from app.config import settings
@@ -28,9 +28,17 @@ async def _git(repo_path: str, *args: str, input_data: bytes | None = None) -> s
     return stdout.decode()
 
 
+def _verification(request: Request) -> dict:
+    is_inst = getattr(request.state, "is_installation_token", False)
+    if is_inst:
+        return {"verified": True, "reason": "valid", "signature": None, "payload": None}
+    return {"verified": False, "reason": "unsigned", "signature": None, "payload": None}
+
+
 @router.get("/repos/{owner}/{repo}/git/commits/{sha}")
 async def get_git_commit(
-    owner: str, repo: str, sha: str, db: DbSession, current_user: CurrentUser
+    owner: str, repo: str, sha: str, db: DbSession, current_user: CurrentUser,
+    request: Request = None,
 ):
     """Get a Git commit object."""
     repository = await get_repo_or_404(owner, repo, db)
@@ -73,13 +81,14 @@ async def get_git_commit(
             {"sha": p, "url": f"{api}/repos/{owner}/{repo}/git/commits/{p}", "html_url": f"{BASE}/{owner}/{repo}/commit/{p}"}
             for p in parent_shas
         ],
-        "verification": {"verified": False, "reason": "unsigned", "signature": None, "payload": None},
+        "verification": _verification(request),
     }
 
 
 @router.post("/repos/{owner}/{repo}/git/commits", status_code=201)
 async def create_git_commit(
-    owner: str, repo: str, body: dict, user: AuthUser, db: DbSession
+    owner: str, repo: str, body: dict, user: AuthUser, db: DbSession,
+    request: Request = None,
 ):
     """Create a Git commit."""
     repository = await get_repo_or_404(owner, repo, db)
@@ -109,4 +118,5 @@ async def create_git_commit(
         "message": message,
         "tree": {"sha": tree, "url": f"{api}/repos/{owner}/{repo}/git/trees/{tree}"},
         "parents": [{"sha": p, "url": f"{api}/repos/{owner}/{repo}/git/commits/{p}"} for p in parents],
+        "verification": _verification(request),
     }
