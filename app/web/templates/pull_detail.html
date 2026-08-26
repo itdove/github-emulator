@@ -133,8 +133,13 @@
                     {{ commit.author_name }} committed {{ commit.author_date }}
                 </div>
             </div>
-            <a class="Link--secondary text-mono f6"
-               href="{{ url_prefix }}/{{ owner }}/{{ repo.name }}/commit/{{ commit.sha }}">{{ commit.sha[:7] }}</a>
+            <div class="d-flex flex-items-center" style="gap:8px;">
+                {% if commit.verified %}
+                <span class="Label Label--success" title="Verified: created with GitHub App installation token">Verified</span>
+                {% endif %}
+                <a class="Link--secondary text-mono f6"
+                   href="{{ url_prefix }}/{{ owner }}/{{ repo.name }}/commit/{{ commit.sha }}">{{ commit.sha[:7] }}</a>
+            </div>
         </div>
         {% endfor %}
     </div>
