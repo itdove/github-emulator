@@ -13,8 +13,10 @@ router = APIRouter(tags=["git-commits"])
 BASE = settings.BASE_URL
 
 
-async def _git(repo_path: str, *args: str, input_data: bytes | None = None) -> str:
+async def _git(repo_path: str, *args: str, input_data: bytes | None = None, extra_env: dict | None = None) -> str:
     env = {**os.environ, "GIT_DIR": repo_path}
+    if extra_env:
+        env.update(extra_env)
     proc = await asyncio.create_subprocess_exec(
         "git", *args,
         stdin=asyncio.subprocess.PIPE if input_data else None,
@@ -102,12 +104,32 @@ async def create_git_commit(
     if not message or not tree:
         raise HTTPException(status_code=422, detail="message and tree are required")
 
+    author_info = body.get("author", {})
+    committer_info = body.get("committer", {})
+    author_name = author_info.get("name", user.name or user.login)
+    author_email = author_info.get("email", user.email or f"{user.login}@github-emulator.local")
+    committer_name = committer_info.get("name", author_name)
+    committer_email = committer_info.get("email", author_email)
+
+    commit_env = {
+        "GIT_AUTHOR_NAME": author_name,
+        "GIT_AUTHOR_EMAIL": author_email,
+        "GIT_COMMITTER_NAME": committer_name,
+        "GIT_COMMITTER_EMAIL": committer_email,
+    }
+    author_date = author_info.get("date")
+    committer_date = committer_info.get("date")
+    if author_date:
+        commit_env["GIT_AUTHOR_DATE"] = author_date
+    if committer_date:
+        commit_env["GIT_COMMITTER_DATE"] = committer_date
+
     args = ["commit-tree", tree, "-m", message]
     for parent in parents:
         args.extend(["-p", parent])
 
     try:
-        sha = (await _git(repository.disk_path, *args)).strip()
+        sha = (await _git(repository.disk_path, *args, extra_env=commit_env)).strip()
     except RuntimeError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
