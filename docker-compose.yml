@@ -8,7 +8,7 @@ services:
     ports:
       - "443:443"
       - "80:80"
-      - "8000:8000"
+      - "${GITHUB_EMULATOR_HOST_PORT:-8000}:8000"
       - "2222:2222"
     volumes:
       - github_emulator_data:/data

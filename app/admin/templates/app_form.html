@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block title %}Register App - GitHub Emulator Admin{% endblock %}
+
+{% block content %}
+<h2 class="f2 mb-3">Register GitHub App</h2>
+
+{% if created_app %}
+<div class="Box p-4">
+    <h3 class="f3 mb-2">App Registered Successfully</h3>
+    <dl class="form-group-body mb-3">
+        <dt class="text-bold">App ID</dt>
+        <dd>{{ created_app.id }}</dd>
+        <dt class="text-bold mt-2">Name</dt>
+        <dd>{{ created_app.name }}</dd>
+        <dt class="text-bold mt-2">Slug</dt>
+        <dd><code>{{ created_app.slug }}</code></dd>
+        <dt class="text-bold mt-2">Client ID</dt>
+        <dd><code>{{ created_app.client_id }}</code></dd>
+    </dl>
+    <p><strong>Important:</strong> Copy your private key now. While you can re-download it later from the app detail page, treat it as sensitive.
+        <button type="button" class="btn btn-sm btn-outline ml-2" onclick="navigator.clipboard.writeText(document.getElementById('private-key-text').textContent).then(function(){this.textContent='Copied!'}.bind(this))">
+            <svg class="octicon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z"></path><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"></path></svg>
+            Copy
+        </button>
+    </p>
+    <div class="Box color-bg-subtle p-3 mb-3" style="max-height: 300px; overflow-y: auto;">
+        <pre id="private-key-text" class="f6" style="white-space: pre-wrap; word-break: break-all;">{{ private_key }}</pre>
+    </div>
+    <a href="/admin/apps/{{ created_app.id }}" class="btn btn-primary">View App</a>
+    <a href="/admin/apps" class="btn ml-2">Back to Apps</a>
+</div>
+{% else %}
+<div class="Box p-4">
+    <form method="post" action="/admin/apps/create" class="admin-form">
+        <div class="form-group">
+            <label for="name">App Name</label>
+            <input type="text" id="name" name="name" class="form-control" placeholder="e.g. my-ci-bot" required>
+        </div>
+        <div class="form-group">
+            <label for="owner">Owner</label>
+            <input type="text" id="owner" name="owner" class="form-control" value="admin" placeholder="org or user login" required>
+        </div>
+        <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Register App</button>
+            <a href="/admin/apps" class="btn ml-2">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endif %}
+{% endblock %}

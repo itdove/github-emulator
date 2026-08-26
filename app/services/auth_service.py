@@ -68,6 +68,13 @@ async def validate_token(db: AsyncSession, token: str) -> Optional[User]:
     )
     pat = result.scalar_one_or_none()
     if pat is None:
+        if token.startswith("ghs_"):
+            from app.services.github_app_service import validate_installation_token
+            inst_token = await validate_installation_token(db, token)
+            if inst_token is not None:
+                owner_name = inst_token.installation.app.owner
+                result = await db.execute(select(User).where(User.login == owner_name))
+                return result.scalar_one_or_none()
         return None
 
     # Check expiration

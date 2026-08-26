@@ -187,6 +187,8 @@ def create_app() -> FastAPI:
     from app.api.user_keys import router as user_keys_router
     from app.api.deploy_keys import router as deploy_keys_router
     from app.api.review_comments import router as review_comments_router
+    from app.api.github_apps import router as github_apps_router
+    from app.api.admin_apps import router as admin_apps_router
 
     # -- REST API routers (under /api/v3/ prefix) ----------------------------
     api_routers = [
@@ -202,6 +204,7 @@ def create_app() -> FastAPI:
         markdown_router, emojis_router, gitignore_router,
         licenses_router, user_keys_router, deploy_keys_router,
         review_comments_router,
+        github_apps_router,
     ]
     for router in api_routers:
         app.include_router(router, prefix="/api/v3")
@@ -211,6 +214,9 @@ def create_app() -> FastAPI:
 
     # OAuth routes stay at root (web-facing, not API paths)
     app.include_router(oauth_router)
+
+    # Admin Apps API (root-level, not under /api/v3)
+    app.include_router(admin_apps_router)
 
     # -- GraphQL API ----------------------------------------------------------
     try:

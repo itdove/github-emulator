@@ -29,14 +29,16 @@ class AuthMiddleware(BaseHTTPMiddleware):
         self, request: Request, call_next: RequestResponseEndpoint
     ) -> Response:
         request.state.user = None
+        request.state.is_installation_token = False
 
         auth_header = request.headers.get("Authorization")
         if auth_header:
             from app.database import async_session
 
             async with async_session() as db:
-                user = await _extract_user_from_auth(db, auth_header)
+                user, is_inst = await _extract_user_from_auth(db, auth_header)
                 request.state.user = user
+                request.state.is_installation_token = is_inst
 
         response = await call_next(request)
         return response
@@ -44,34 +46,44 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
 async def _extract_user_from_auth(
     db: AsyncSession, auth_header: str
-) -> Optional[User]:
+) -> tuple[Optional[User], bool]:
     """Extract and validate user from an Authorization header.
 
-    Args:
-        db: Async database session.
-        auth_header: The raw Authorization header value.
-
     Returns:
-        The authenticated User, or None.
+        Tuple of (User or None, is_installation_token).
     """
     parts = auth_header.split(" ", 1)
     if len(parts) != 2:
-        return None
+        return None, False
 
     scheme, credentials = parts[0].lower(), parts[1]
 
     if scheme in ("token", "bearer"):
-        return await validate_token(db, credentials)
+        user = await validate_token(db, credentials)
+        if user is not None:
+            return user, False
+        if credentials.startswith("ghs_"):
+            from app.services.github_app_service import validate_installation_token
+            from sqlalchemy import select
+            inst_token = await validate_installation_token(db, credentials)
+            if inst_token is not None:
+                owner_name = inst_token.installation.app.owner
+                result = await db.execute(
+                    select(User).where(User.login == owner_name)
+                )
+                return result.scalar_one_or_none(), True
+        return None, False
 
     if scheme == "basic":
         try:
             decoded = base64.b64decode(credentials).decode("utf-8")
             username, password = decoded.split(":", 1)
-            return await validate_basic_auth(db, username, password)
+            user = await validate_basic_auth(db, username, password)
+            return user, False
         except Exception:
-            return None
+            return None, False
 
-    return None
+    return None, False
 
 
 async def get_current_user(request: Request) -> Optional[User]:
