@@ -85,6 +85,14 @@ async def get_ref(
     return _ref_json(full_ref, sha, owner, repo, BASE)
 
 
+@router.get("/repos/{owner}/{repo}/git/refs/{ref:path}")
+async def get_ref_plural(
+    owner: str, repo: str, ref: str, db: DbSession, current_user: CurrentUser
+):
+    """Get a single reference (plural URL variant)."""
+    return await get_ref(owner, repo, ref, db, current_user)
+
+
 @router.post("/repos/{owner}/{repo}/git/refs", status_code=201)
 async def create_ref(
     owner: str, repo: str, body: dict, user: AuthUser, db: DbSession
