@@ -1294,6 +1294,10 @@ async def commits_list(
 
     has_next = (page * per_page) < total
 
+    from app.api.git_commits import _is_verified_commit
+    for commit in commits:
+        commit["verified"] = await _is_verified_commit(db, repo.id, commit.get("sha", ""))
+
     return templates.TemplateResponse(
         request=request,
         name="commits.html",
@@ -1325,6 +1329,7 @@ async def commit_detail_view(
 
     commit_info = None
     diff_files = []
+    verified = False
     if repo.disk_path and os.path.isdir(repo.disk_path):
         commit_info = await get_commit_info(repo.disk_path, sha)
         diff_files = await get_commit_diff(repo.disk_path, sha)
@@ -1332,12 +1337,16 @@ async def commit_detail_view(
     if commit_info is None:
         return HTMLResponse(content="<h1>404 - Commit Not Found</h1>", status_code=404)
 
+    from app.api.git_commits import _is_verified_commit
+    verified = await _is_verified_commit(db, repo.id, commit_info.get("sha", sha))
+
     return templates.TemplateResponse(
         request=request,
         name="commit_detail.html",
         context=_ctx(
             request, owner=owner, repo=repo, repo_name=repo.name,
             commit_info=commit_info, diff_files=diff_files,
+            verified=verified,
             current_user=current_user,
         ),
     )

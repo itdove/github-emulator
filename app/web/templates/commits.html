@@ -30,7 +30,10 @@
                     committed on {{ commit.author_date[:10] }}
                 </div>
             </div>
-            <div class="d-flex flex-items-center flex-shrink-0">
+            <div class="d-flex flex-items-center flex-shrink-0" style="gap:8px;">
+                {% if commit.verified %}
+                <span class="Label Label--success" title="Verified: created with GitHub App installation token">Verified</span>
+                {% endif %}
                 <a href="{{ url_prefix }}/{{ owner }}/{{ repo.name }}/commit/{{ commit.sha }}"
                    class="f6 Link--secondary text-mono">{{ commit.sha[:7] }}</a>
             </div>
