@@ -961,6 +961,9 @@ async def pull_detail(
             commits = await get_log(
                 repo.disk_path, ref=f"{pr.resolved_base_ref}..{pr.resolved_head_ref}"
             )
+            from app.api.git_commits import _is_verified_commit
+            for commit in commits:
+                commit["verified"] = await _is_verified_commit(db, repo.id, commit.get("sha", ""))
 
     # Get comments on the issue
     result = await db.execute(
