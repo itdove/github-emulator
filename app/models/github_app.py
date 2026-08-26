@@ -55,3 +55,14 @@ class InstallationToken(Base):
     )
 
     installation = relationship("AppInstallation", back_populates="tokens", lazy="selectin")
+
+
+class VerifiedCommit(Base):
+    __tablename__ = "verified_commits"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    repo_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    sha: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now()
+    )

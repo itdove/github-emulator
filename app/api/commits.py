@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DbSession, get_repo_or_404
+from app.api.git_commits import _is_verified_commit
 from app.config import settings
 from app.schemas.user import _fmt_dt, _make_node_id
 
@@ -112,8 +113,9 @@ async def list_commits(
     commits = []
     for line in out.strip().splitlines():
         if line:
-            is_inst = getattr(request.state, "is_installation_token", False)
-            commits.append(_parse_commit_line(line, owner, repo, BASE, verified=is_inst))
+            commit_sha = line.split("\x1f", 1)[0]
+            verified = await _is_verified_commit(db, repository.id, commit_sha)
+            commits.append(_parse_commit_line(line, owner, repo, BASE, verified=verified))
 
     return commits
 
@@ -139,8 +141,9 @@ async def get_commit(
     if not line:
         raise HTTPException(status_code=404, detail="Not Found")
 
-    is_inst = getattr(request.state, "is_installation_token", False)
-    return _parse_commit_line(line, owner, repo, BASE, verified=is_inst)
+    commit_sha = line.split("\x1f", 1)[0]
+    verified = await _is_verified_commit(db, repository.id, commit_sha)
+    return _parse_commit_line(line, owner, repo, BASE, verified=verified)
 
 
 @router.get("/repos/{owner}/{repo}/compare/{basehead}")
