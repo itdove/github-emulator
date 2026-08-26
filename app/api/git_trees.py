@@ -1,6 +1,7 @@
 """Git Data API -- Trees."""
 
 import asyncio
+import base64
 import os
 
 from fastapi import APIRouter, HTTPException
@@ -99,13 +100,31 @@ async def create_tree(
         path = entry.get("path", "")
         mode = entry.get("mode", "100644")
         entry_type = entry.get("type", "blob")
-        sha = entry.get("sha", "")
-        # Remove any existing entry for this path
+        sha = entry.get("sha")
+        content = entry.get("content")
+
+        if not sha and content is not None:
+            encoding = entry.get("encoding", "utf-8")
+            if encoding == "base64":
+                try:
+                    data = base64.b64decode(content)
+                except Exception:
+                    raise HTTPException(status_code=422, detail="Invalid base64 content")
+            else:
+                data = content.encode("utf-8")
+            try:
+                sha = (await _git(repository.disk_path, "hash-object", "-w", "--stdin", input_data=data)).strip()
+            except RuntimeError as e:
+                raise HTTPException(status_code=422, detail=str(e))
+
         lines = [l for l in lines if not l.endswith(f"\t{path}")]
         if sha:
             lines.append(f"{mode} {entry_type} {sha}\t{path}")
 
-    tree_input = "\n".join(lines) + "\n" if lines else "\n"
+    if not lines:
+        raise HTTPException(status_code=422, detail="tree is empty")
+
+    tree_input = "\n".join(lines) + "\n"
 
     try:
         tree_sha = (await _git(repository.disk_path, "mktree", input_data=tree_input.encode())).strip()
