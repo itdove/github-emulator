@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import os
+import tempfile
 
 from fastapi import APIRouter, HTTPException
 
@@ -14,8 +15,10 @@ router = APIRouter(tags=["git-trees"])
 BASE = settings.BASE_URL
 
 
-async def _git(repo_path: str, *args: str, input_data: bytes | None = None) -> str:
+async def _git(repo_path: str, *args: str, input_data: bytes | None = None, extra_env: dict | None = None) -> str:
     env = {**os.environ, "GIT_DIR": repo_path}
+    if extra_env:
+        env.update(extra_env)
     proc = await asyncio.create_subprocess_exec(
         "git", *args,
         stdin=asyncio.subprocess.PIPE if input_data else None,
@@ -88,48 +91,54 @@ async def create_tree(
     tree_entries = body.get("tree", [])
     base_tree = body.get("base_tree")
 
-    lines = []
-    if base_tree:
-        try:
-            existing = await _git(repository.disk_path, "ls-tree", base_tree)
-            lines = [l for l in existing.strip().splitlines() if l]
-        except RuntimeError:
-            pass
-
-    for entry in tree_entries:
-        path = entry.get("path", "")
-        mode = entry.get("mode", "100644")
-        entry_type = entry.get("type", "blob")
-        sha = entry.get("sha")
-        content = entry.get("content")
-
-        if not sha and content is not None:
-            encoding = entry.get("encoding", "utf-8")
-            if encoding == "base64":
-                try:
-                    data = base64.b64decode(content)
-                except Exception:
-                    raise HTTPException(status_code=422, detail="Invalid base64 content")
-            else:
-                data = content.encode("utf-8")
-            try:
-                sha = (await _git(repository.disk_path, "hash-object", "-w", "--stdin", input_data=data)).strip()
-            except RuntimeError as e:
-                raise HTTPException(status_code=422, detail=str(e))
-
-        lines = [l for l in lines if not l.endswith(f"\t{path}")]
-        if sha:
-            lines.append(f"{mode} {entry_type} {sha}\t{path}")
-
-    if not lines:
+    if not tree_entries:
         raise HTTPException(status_code=422, detail="tree is empty")
 
-    tree_input = "\n".join(lines) + "\n"
+    # Use a temporary index file to build the tree — supports nested paths
+    with tempfile.NamedTemporaryFile(suffix=".idx", delete=True) as tmp:
+        idx_path = tmp.name
+
+    idx_env = {"GIT_INDEX_FILE": idx_path}
 
     try:
-        tree_sha = (await _git(repository.disk_path, "mktree", input_data=tree_input.encode())).strip()
+        if base_tree:
+            await _git(repository.disk_path, "read-tree", base_tree, extra_env=idx_env)
+
+        for entry in tree_entries:
+            path = entry.get("path", "")
+            mode = entry.get("mode", "100644")
+            sha = entry.get("sha")
+            content = entry.get("content")
+
+            if not sha and content is not None:
+                encoding = entry.get("encoding", "utf-8")
+                if encoding == "base64":
+                    try:
+                        data = base64.b64decode(content)
+                    except Exception:
+                        raise HTTPException(status_code=422, detail="Invalid base64 content")
+                else:
+                    data = content.encode("utf-8")
+                try:
+                    sha = (await _git(repository.disk_path, "hash-object", "-w", "--stdin", input_data=data)).strip()
+                except RuntimeError as e:
+                    raise HTTPException(status_code=422, detail=str(e))
+
+            if not sha:
+                continue
+
+            await _git(
+                repository.disk_path,
+                "update-index", "--add", "--cacheinfo", f"{mode},{sha},{path}",
+                extra_env=idx_env,
+            )
+
+        tree_sha = (await _git(repository.disk_path, "write-tree", extra_env=idx_env)).strip()
     except RuntimeError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    finally:
+        if os.path.exists(idx_path):
+            os.unlink(idx_path)
 
     api = f"{BASE}/api/v3"
     return {
