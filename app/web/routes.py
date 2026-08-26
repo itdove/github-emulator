@@ -1015,6 +1015,77 @@ async def pull_detail(
     )
 
 
+@router.post("/{owner}/{repo_name}/pulls/{number:int}/close")
+async def close_pull_web(
+    request: Request,
+    owner: str,
+    repo_name: str,
+    number: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Close a pull request without merging."""
+    current_user = await _get_current_user(request, db)
+    if not current_user:
+        return RedirectResponse(url="/ui/login", status_code=302)
+
+    repo = await _get_repo(db, owner, repo_name)
+    if repo is None:
+        return HTMLResponse(content="<h1>404 - Not Found</h1>", status_code=404)
+
+    result = await db.execute(
+        select(Issue).where(Issue.repo_id == repo.id, Issue.number == number)
+    )
+    issue = result.scalar_one_or_none()
+    if issue is None or issue.pull_request is None:
+        return HTMLResponse(content="<h1>404 - PR Not Found</h1>", status_code=404)
+
+    issue.state = "closed"
+    issue.closed_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    return RedirectResponse(
+        url=f"/ui/{owner}/{repo_name}/pulls/{number}", status_code=302
+    )
+
+
+@router.post("/{owner}/{repo_name}/pulls/{number:int}/reopen")
+async def reopen_pull_web(
+    request: Request,
+    owner: str,
+    repo_name: str,
+    number: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Reopen a closed pull request."""
+    current_user = await _get_current_user(request, db)
+    if not current_user:
+        return RedirectResponse(url="/ui/login", status_code=302)
+
+    repo = await _get_repo(db, owner, repo_name)
+    if repo is None:
+        return HTMLResponse(content="<h1>404 - Not Found</h1>", status_code=404)
+
+    result = await db.execute(
+        select(Issue).where(Issue.repo_id == repo.id, Issue.number == number)
+    )
+    issue = result.scalar_one_or_none()
+    if issue is None or issue.pull_request is None:
+        return HTMLResponse(content="<h1>404 - PR Not Found</h1>", status_code=404)
+
+    if issue.pull_request.merged:
+        return RedirectResponse(
+            url=f"/ui/{owner}/{repo_name}/pulls/{number}", status_code=302
+        )
+
+    issue.state = "open"
+    issue.closed_at = None
+    await db.commit()
+
+    return RedirectResponse(
+        url=f"/ui/{owner}/{repo_name}/pulls/{number}", status_code=302
+    )
+
+
 @router.post("/{owner}/{repo_name}/pulls/{number:int}/merge")
 async def merge_pull_web(
     request: Request,

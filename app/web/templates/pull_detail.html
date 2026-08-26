@@ -208,16 +208,27 @@
                 <div class="color-fg-muted f6">Merging will close this pull request.</div>
                 {% endif %}
             </div>
-            {% if pr.state == "open" and not pr.merged and pr.mergeable is not sameas false %}
-                {% if can_merge %}
-                <form method="post" action="{{ url_prefix }}/{{ owner }}/{{ repo.name }}/pulls/{{ pr.number }}/merge">
-                    <button type="submit" class="btn btn-primary">Merge pull request</button>
+            {% if pr.state == "open" and not pr.merged %}
+                <div class="d-flex flex-items-center" style="gap:8px;">
+                    {% if pr.mergeable is not sameas false %}
+                        {% if can_merge %}
+                        <form method="post" action="{{ url_prefix }}/{{ owner }}/{{ repo.name }}/pulls/{{ pr.number }}/merge">
+                            <button type="submit" class="btn btn-primary">Merge pull request</button>
+                        </form>
+                        {% elif not current_user %}
+                        <a class="btn btn-primary" href="{{ url_prefix }}/login">Sign in to merge</a>
+                        {% endif %}
+                    {% endif %}
+                    {% if current_user %}
+                    <form method="post" action="{{ url_prefix }}/{{ owner }}/{{ repo.name }}/pulls/{{ pr.number }}/close">
+                        <button type="submit" class="btn btn-danger">Close pull request</button>
+                    </form>
+                    {% endif %}
+                </div>
+            {% elif pr.state != "open" and not pr.merged and current_user %}
+                <form method="post" action="{{ url_prefix }}/{{ owner }}/{{ repo.name }}/pulls/{{ pr.number }}/reopen">
+                    <button type="submit" class="btn btn-outline">Reopen pull request</button>
                 </form>
-                {% elif current_user %}
-                <span class="color-fg-muted f6">You do not have permission to merge.</span>
-                {% else %}
-                <a class="btn btn-primary" href="{{ url_prefix }}/login">Sign in to merge</a>
-                {% endif %}
             {% endif %}
         </div>
     </div>
