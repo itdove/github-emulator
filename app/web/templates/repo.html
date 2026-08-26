@@ -18,13 +18,22 @@
 {% endif %}
 
 {# ---- Branch selector ---- #}
+{% set ref = selected_ref if selected_ref is defined else default_branch %}
 <div class="d-flex flex-items-center flex-justify-between mb-3">
     <div class="d-flex flex-items-center">
         <span class="color-fg-muted mr-1">{{ git_branch(16) }}</span>
-        <span class="branch-name">{{ default_branch }}</span>
+        {% if branches is defined and branches %}
+        <select class="form-select form-select-sm" onchange="window.location.href='{{ url_prefix }}/{{ owner }}/{{ repo.name }}/tree/'+this.value" style="font-weight:600;">
+            {% for branch in branches %}
+            <option value="{{ branch }}"{% if branch == ref %} selected{% endif %}>{{ branch }}</option>
+            {% endfor %}
+        </select>
+        {% else %}
+        <span class="branch-name">{{ ref }}</span>
+        {% endif %}
     </div>
     {% if current_user %}
-    <a href="{{ url_prefix }}/{{ owner }}/{{ repo.name }}/new/{{ default_branch }}"
+    <a href="{{ url_prefix }}/{{ owner }}/{{ repo.name }}/new/{{ ref }}"
        class="btn btn-sm btn-primary">{{ plus(16) }} Add file</a>
     {% endif %}
 </div>
@@ -32,7 +41,7 @@
 {# ---- Stats bar (commits / branches / tags) ---- #}
 {% if commit_count is defined and commit_count %}
 <div class="d-flex flex-items-center color-fg-muted f6 mb-3" style="gap:12px;">
-    <a href="{{ url_prefix }}/{{ owner }}/{{ repo.name }}/commits/{{ default_branch }}"
+    <a href="{{ url_prefix }}/{{ owner }}/{{ repo.name }}/commits/{{ ref }}"
        class="Link--secondary d-flex flex-items-center">
         <span class="mr-1">{{ history(16) }}</span>
         <strong class="color-fg-default">{{ commit_count }}</strong>&nbsp;commit{{ 's' if commit_count != 1 else '' }}
@@ -60,10 +69,10 @@
     <div class="Box-row py-2 d-flex flex-items-center">
         {% if entry.type == "tree" %}
         <span class="color-fg-muted mr-2">{{ file_directory(16) }}</span>
-        <a href="{{ url_prefix }}/{{ owner }}/{{ repo.name }}/tree/{{ default_branch }}/{{ entry.name }}" class="Link--primary">{{ entry.name }}</a>
+        <a href="{{ url_prefix }}/{{ owner }}/{{ repo.name }}/tree/{{ ref }}/{{ entry.name }}" class="Link--primary">{{ entry.name }}</a>
         {% else %}
         <span class="color-fg-muted mr-2">{{ file_icon(16) }}</span>
-        <a href="{{ url_prefix }}/{{ owner }}/{{ repo.name }}/blob/{{ default_branch }}/{{ entry.name }}" class="Link--primary">{{ entry.name }}</a>
+        <a href="{{ url_prefix }}/{{ owner }}/{{ repo.name }}/blob/{{ ref }}/{{ entry.name }}" class="Link--primary">{{ entry.name }}</a>
         {% endif %}
     </div>
     {% endfor %}
