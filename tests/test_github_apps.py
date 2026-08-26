@@ -345,6 +345,54 @@ async def test_commit_verified_with_installation_token(
 
 
 @pytest.mark.asyncio
+async def test_verified_commit_readable_with_pat(
+    client, admin_user, admin_token, github_app, installation, test_repo_with_init
+):
+    """Verified commit should show verified: true even when read with a PAT."""
+    owner, repo_name, _ = test_repo_with_init
+
+    jwt_token = _make_jwt(github_app["app_id"], github_app["private_key"])
+    resp = await client.post(
+        f"{API}/app/installations/{installation['id']}/access_tokens",
+        headers=_jwt_headers(jwt_token),
+    )
+    inst_token = resp.json()["token"]
+    inst_headers = {"Authorization": f"token {inst_token}"}
+
+    resp = await client.get(
+        f"{API}/repos/{owner}/{repo_name}/git/refs",
+        headers=inst_headers,
+    )
+    if resp.status_code != 200 or not resp.json():
+        pytest.skip("No refs available")
+
+    head_sha = resp.json()[0]["object"]["sha"]
+    resp = await client.get(
+        f"{API}/repos/{owner}/{repo_name}/git/commits/{head_sha}",
+        headers=inst_headers,
+    )
+    tree_sha = resp.json()["tree"]["sha"]
+
+    # Create commit with installation token
+    resp = await client.post(
+        f"{API}/repos/{owner}/{repo_name}/git/commits",
+        json={"message": "verified commit", "tree": tree_sha, "parents": [head_sha]},
+        headers=inst_headers,
+    )
+    assert resp.status_code == 201
+    commit_sha = resp.json()["sha"]
+
+    # Read same commit with PAT — should still be verified
+    resp = await client.get(
+        f"{API}/repos/{owner}/{repo_name}/git/commits/{commit_sha}",
+        headers=auth_headers(admin_token),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["verification"]["verified"] is True
+    assert resp.json()["verification"]["reason"] == "valid"
+
+
+@pytest.mark.asyncio
 async def test_commit_not_verified_with_pat(
     client, test_user, test_token, test_repo_with_init
 ):
