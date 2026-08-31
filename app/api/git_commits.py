@@ -116,10 +116,6 @@ async def create_git_commit(
     if not message or not tree:
         raise HTTPException(status_code=422, detail="message and tree are required")
 
-    args = ["commit-tree", tree, "-m", message]
-    for parent in parents:
-        args.extend(["-p", parent])
-
     author_info = body.get("author", {})
     committer_info = body.get("committer", {})
     author_name = author_info.get("name", user.name or user.login)
@@ -139,6 +135,10 @@ async def create_git_commit(
         commit_env["GIT_AUTHOR_DATE"] = author_date
     if committer_date:
         commit_env["GIT_COMMITTER_DATE"] = committer_date
+
+    args = ["commit-tree", tree, "-m", message]
+    for parent in parents:
+        args.extend(["-p", parent])
 
     try:
         sha = (await _git(repository.disk_path, *args, extra_env=commit_env)).strip()
